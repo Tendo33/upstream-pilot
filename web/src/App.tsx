@@ -4,6 +4,8 @@ import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-route
 import { api, errorMessage, isAuthError, json } from "./api";
 import { AppShell } from "./components/AppShell";
 import { Button, ToastProvider } from "./components/ui";
+import { QualityPage } from "./pages/QualityPage";
+import { QualityAlertsPage } from "./pages/QualityAlertsPage";
 import { AccountsPage } from "./pages/AccountsPage";
 import { AuthPage } from "./pages/AuthPage";
 import { BalanceAlertsPage } from "./pages/BalanceAlertsPage";
@@ -97,7 +99,9 @@ function AuthenticatedApp({ user, dark, setDark, onSessionEnded }: { user: User;
   return (
     <AppShell user={user} dark={dark} onToggleTheme={() => setDark(!dark)} onLogout={() => void logout()}>
       <Routes>
-        <Route path="/" element={<OverviewPage />} />
+        <Route path="/" element={<QualityPage />} />
+        <Route path="/overview" element={<OverviewPage />} />
+        <Route path="/quality-alerts" element={<QualityAlertsPage />} />
         <Route path="/sites" element={<SitesPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/groups" element={<GroupsPage />} />
@@ -113,7 +117,7 @@ function AuthenticatedApp({ user, dark, setDark, onSessionEnded }: { user: User;
 function BootLoader() {
   return (
     <main className="boot-screen">
-      <div className="boot-brand"><span className="brand-mark"><span /></span><span className="brand-name">S2AM<span>-GO</span></span></div>
+      <div className="boot-brand"><span className="brand-mark"><span /></span><span className="brand-name">Upstream<span> Manager</span></span></div>
       <LoaderCircle className="spin" size={19} aria-label="正在连接服务器" />
     </main>
   );

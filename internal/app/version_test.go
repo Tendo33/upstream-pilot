@@ -98,7 +98,7 @@ func TestVersionCheckerDegradesWhenGitHubFails(t *testing.T) {
 	}
 }
 
-func TestVersionStatusHandlerReturnsLocalVersionWhenGitHubFails(t *testing.T) {
+func TestVersionStatusHandlerDoesNotAdvertiseUpstreamUpgrade(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
@@ -121,7 +121,7 @@ func TestVersionStatusHandlerReturnsLocalVersionWhenGitHubFails(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if payload.Data.CurrentVersion == "" || payload.Data.RepositoryURL != githubRepositoryURL {
+	if payload.Data.CurrentVersion == "" || payload.Data.RepositoryURL != "" || payload.Data.UpdateAvailable {
 		t.Fatalf("response did not include local version information: %#v", payload.Data)
 	}
 }

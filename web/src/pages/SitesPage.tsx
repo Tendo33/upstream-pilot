@@ -210,7 +210,7 @@ export function SitesPage() {
                 </div>
                 <div className="site-timestamps">
                   <span>库存同步 <time>{formatDate(site.last_inventory_at)}</time></span>
-                  <span>优先级排序 <time>{formatDate(site.last_reconcile_at)}</time></span>
+                  <span>质量策略评估 <time>{formatDate(site.last_reconcile_at)}</time></span>
                   {site.cache_rate_priority_enabled ? <span>缓存率采样 <time>{formatDate(site.last_cache_sample_at)}</time></span> : null}
                 </div>
                 <div className="site-toggle">
@@ -223,7 +223,7 @@ export function SitesPage() {
                   <IconButton label="同步库存" onClick={() => void runAction(site, "sync")} disabled={Boolean(busy)}>
                     <RefreshCw size={16} className={busy === `${site.id}:sync` ? "spin" : undefined} />
                   </IconButton>
-                  <IconButton label="执行优先级排序" onClick={() => void runAction(site, "reconcile")} disabled={Boolean(busy)}>
+                  <IconButton label="执行质量策略评估" onClick={() => void runAction(site, "reconcile")} disabled={Boolean(busy)}>
                     <ArrowDownUp size={16} className={busy === `${site.id}:reconcile` ? "spin" : undefined} />
                   </IconButton>
                   <IconButton label="采样缓存率" onClick={() => void runAction(site, "cache-sample")} disabled={Boolean(busy)}>
@@ -272,36 +272,8 @@ export function SitesPage() {
               <Field label="库存同步间隔" hint="30 至 86400 秒">
                 <NumberInput value={editor.values.inventory_interval_seconds} min={30} max={86400} onChange={(value) => setEditor({ ...editor, values: { ...editor.values, inventory_interval_seconds: value } })} />
               </Field>
-              <Field label="优先级排序间隔" hint="10 至 86400 秒">
+              <Field label="质量策略评估间隔" hint="10 至 86400 秒">
                 <NumberInput value={editor.values.reconcile_interval_seconds} min={10} max={86400} onChange={(value) => setEditor({ ...editor, values: { ...editor.values, reconcile_interval_seconds: value } })} />
-              </Field>
-              <Field label="优先级起始值" hint="倍率最低的账号从此值开始">
-                <NumberInput value={editor.values.priority_start} min={0} max={1_000_000} onChange={(value) => setEditor({ ...editor, values: { ...editor.values, priority_start: value } })} />
-              </Field>
-              <Field label="优先级步长" hint="数值越高，Sub2API 优先级越低">
-                <NumberInput value={editor.values.priority_step} min={1} max={100_000} onChange={(value) => setEditor({ ...editor, values: { ...editor.values, priority_step: value } })} />
-              </Field>
-            </div>
-            <div className="form-divider"><Percent size={15} /><span>缓存率排序</span></div>
-            <div className="setting-inline"><span>按近期缓存率影响优先级</span><Switch checked={editor.values.cache_rate_priority_enabled} onChange={(checked) => setEditor({ ...editor, values: { ...editor.values, cache_rate_priority_enabled: checked } })} label="启用缓存率排序" /></div>
-            <Field label="统计窗口" hint="300 至 86400 秒，可直接选择 30 分钟或 1 小时">
-              <div className="segmented" role="group" aria-label="缓存率统计窗口">
-                <button type="button" className={editor.values.cache_rate_window_seconds === 1800 ? "active" : ""} onClick={() => setEditor({ ...editor, values: { ...editor.values, cache_rate_window_seconds: 1800 } })}>30 分钟</button>
-                <button type="button" className={editor.values.cache_rate_window_seconds === 3600 ? "active" : ""} onClick={() => setEditor({ ...editor, values: { ...editor.values, cache_rate_window_seconds: 3600 } })}>1 小时</button>
-                <button type="button" className={editor.values.cache_rate_window_seconds !== 1800 && editor.values.cache_rate_window_seconds !== 3600 ? "active" : ""} onClick={() => setEditor({ ...editor, values: { ...editor.values, cache_rate_window_seconds: editor.values.cache_rate_window_seconds === 1800 || editor.values.cache_rate_window_seconds === 3600 ? 7200 : editor.values.cache_rate_window_seconds } })}>自定义</button>
-              </div>
-            </Field>
-            {editor.values.cache_rate_window_seconds !== 1800 && editor.values.cache_rate_window_seconds !== 3600 ? (
-              <Field label="自定义窗口" hint="秒">
-                <NumberInput value={editor.values.cache_rate_window_seconds} min={300} max={86400} onChange={(value) => setEditor({ ...editor, values: { ...editor.values, cache_rate_window_seconds: value } })} />
-              </Field>
-            ) : null}
-            <div className="form-grid two">
-              <Field label="倍率权重" hint="0 至 100，越大越偏向低倍率">
-                <NumberInput value={editor.values.rate_priority_weight} min={0} max={100} step="any" onChange={(value) => setEditor({ ...editor, values: { ...editor.values, rate_priority_weight: value } })} />
-              </Field>
-              <Field label="缓存率权重" hint="0 至 100，越大越偏向高缓存率">
-                <NumberInput value={editor.values.cache_rate_priority_weight} min={0} max={100} step="any" onChange={(value) => setEditor({ ...editor, values: { ...editor.values, cache_rate_priority_weight: value } })} />
               </Field>
             </div>
           </form>

@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/langrenjh-alt/S2AM-GO/internal/auditlog"
+	"sub2api-upstream-manager/internal/auditlog"
 )
 
 const legacyAuditMigrationLockID int64 = 7820133780
@@ -72,7 +72,7 @@ func (a *App) migrateLegacyAuditEvents(ctx context.Context) error {
 	}
 
 	var exists bool
-	if err := tx.QueryRow(ctx, `SELECT to_regclass('public.audit_events_legacy') IS NOT NULL`).Scan(&exists); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT to_regclass('audit_events_legacy') IS NOT NULL`).Scan(&exists); err != nil {
 		return fmt.Errorf("inspect legacy audit table: %w", err)
 	}
 	if !exists {
@@ -86,7 +86,7 @@ func (a *App) migrateLegacyAuditEvents(ctx context.Context) error {
 		SELECT e.id::text,e.owner_id::text,COALESCE(e.actor_user_id::text,''),
 		       COALESCE(e.site_id::text,''),COALESCE(e.account_id::text,''),
 		       COALESCE(s.name,''),COALESCE(a.name,''),e.action,e.outcome,e.detail,e.created_at
-		FROM public.audit_events_legacy e
+		FROM audit_events_legacy e
 		LEFT JOIN sites s ON s.id=e.site_id AND s.owner_id=e.owner_id
 		LEFT JOIN upstream_accounts a ON a.id=e.account_id AND a.site_id=e.site_id
 		ORDER BY e.created_at,e.id`)
@@ -125,7 +125,7 @@ func (a *App) migrateLegacyAuditEvents(ctx context.Context) error {
 		return fmt.Errorf("iterate legacy audit events: %w", err)
 	}
 	rows.Close()
-	if _, err := tx.Exec(ctx, `DROP TABLE public.audit_events_legacy`); err != nil {
+	if _, err := tx.Exec(ctx, `DROP TABLE audit_events_legacy`); err != nil {
 		return fmt.Errorf("drop migrated legacy audit table: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

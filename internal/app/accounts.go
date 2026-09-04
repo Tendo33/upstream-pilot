@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math"
 	"net/http"
 	"sort"
@@ -16,8 +15,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/langrenjh-alt/S2AM-GO/internal/health"
-	"github.com/langrenjh-alt/S2AM-GO/internal/upstream"
+	"sub2api-upstream-manager/internal/health"
+	"sub2api-upstream-manager/internal/upstream"
 )
 
 const accountUptimeWindowSize = 60
@@ -811,7 +810,6 @@ func (a *App) runProbe(ctx context.Context, work AccountWork, kind, actorID stri
 		outcome.FailureReason = &classification.Reason
 		outcome.HTTPStatus = classification.HTTPStatus
 	}
-	now := time.Now()
 	var failureReason any
 	var failureHTTPStatus any
 	if classification != nil {
@@ -825,196 +823,17 @@ func (a *App) runProbe(ctx context.Context, work AccountWork, kind, actorID stri
 	// A completed model probe is durable before any local state transition or
 	// remote scheduling side effect. Control-plane failures must not erase an
 	// otherwise deterministic uptime sample.
-	_, err = a.db.Exec(persistenceCtx, `INSERT INTO probe_attempts(id,owner_id,site_id,account_id,kind,success,latency_ms,model,message,failure_reason,http_status) VALUES($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),$9,$10,$11)`, uuid.NewString(), work.OwnerID, work.SiteID, work.ID, kind, result.Success, latency, model, result.Message, failureReason, failureHTTPStatus)
+	_, err = a.db.Exec(persistenceCtx, `INSERT INTO probe_attempts(id,owner_id,site_id,account_id,kind,success,latency_ms,model,message,failure_reason,http_status,first_content_ms,duration_ms,actual_model,stream_complete,control_error) VALUES($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),$9,$10,$11,$12,$13,$14,$15,$16)`, uuid.NewString(), work.OwnerID, work.SiteID, work.ID, kind, result.Success, latency, model, result.Message, failureReason, failureHTTPStatus, result.FirstContentMS, result.DurationMS, result.ActualModel, result.StreamComplete, result.ControlPlaneError)
 	if err != nil {
 		return outcome, err
 	}
 
-	controlSkipped := false
-	var controlWarning error
-	err = a.withAccountSchedulingLock(persistenceCtx, work.ID, func(connection *pgxpool.Conn) error {
-		ctx := persistenceCtx
-		var state probeControlState
-		if loadErr := connection.QueryRow(ctx, `
-			SELECT schedulable,managed_hold,consecutive_failures,consecutive_recovery_successes,failure_threshold,recovery_success_threshold,applied_probe_sequence,scheduling_generation
-			FROM upstream_accounts WHERE id=$1 AND deleted_at IS NULL`, work.ID).Scan(
-			&state.Schedulable, &state.ManagedHold, &state.ConsecutiveFailures, &state.ConsecutiveRecoverySuccesses, &state.FailureThreshold, &state.RecoverySuccessThreshold,
-			&state.AppliedSequence, &state.SchedulingGeneration,
-		); loadErr != nil {
-			return loadErr
-		}
-		if !state.accepts(token) {
-			controlSkipped = true
-			_, updateErr := connection.Exec(ctx, `
-				UPDATE upstream_accounts
-				SET next_probe_at=GREATEST(next_probe_at,$2::timestamptz+probe_interval_seconds*interval '1 second')
-				WHERE id=$1 AND deleted_at IS NULL`, work.ID, now)
-			return updateErr
-		}
-
-		if result.Success {
-			if !state.ManagedHold {
-				command, updateErr := connection.Exec(ctx, `
-					UPDATE upstream_accounts SET
-					 health_state='healthy',consecutive_failures=0,consecutive_recovery_successes=0,last_probe_at=$2,last_probe_latency_ms=$3,last_success_at=$2,
-					 last_failure_reason=NULL,last_failure_http_status=NULL,last_error=NULL,
-					 next_probe_at=$2::timestamptz+probe_interval_seconds*interval '1 second',applied_probe_sequence=$4,updated_at=now()
-					WHERE id=$1 AND deleted_at IS NULL AND applied_probe_sequence<$4 AND scheduling_generation=$5`,
-					work.ID, now, latency, token.Sequence, token.SchedulingGeneration)
-				if updateErr != nil {
-					return updateErr
-				}
-				if command.RowsAffected() == 0 {
-					return errors.New("probe result became stale while recording success")
-				}
-				return nil
-			}
-
-			recoveryThresholdReached := state.recoveryThresholdReached()
-			command, updateErr := connection.Exec(ctx, `
-				UPDATE upstream_accounts SET
-				 consecutive_failures=0,consecutive_recovery_successes=LEAST(consecutive_recovery_successes+1,recovery_success_threshold),last_probe_at=$2,last_probe_latency_ms=$3,last_success_at=$2,
-				 last_failure_reason=NULL,last_failure_http_status=NULL,last_error=NULL,
-				 next_probe_at=$2::timestamptz+probe_interval_seconds*interval '1 second',applied_probe_sequence=$4,updated_at=now()
-				WHERE id=$1 AND managed_hold AND deleted_at IS NULL AND applied_probe_sequence<$4 AND scheduling_generation=$5`,
-				work.ID, now, latency, token.Sequence, token.SchedulingGeneration)
-			if updateErr != nil {
-				return updateErr
-			}
-			if command.RowsAffected() == 0 {
-				return errors.New("managed hold disappeared while recording recovery probe")
-			}
-			if !recoveryThresholdReached {
-				return nil
-			}
-
-			remote, recoveryErr := client.GetAccount(ctx, work.RemoteID)
-			if recoveryErr == nil && !remote.Schedulable {
-				remote, recoveryErr = client.SetSchedulable(ctx, work.RemoteID, true)
-			}
-			if recoveryErr == nil && !remote.Schedulable {
-				recoveryErr = errors.New("Sub2API did not restore account scheduling")
-			}
-			if recoveryErr != nil {
-				result.Message = appendProbeControlError(result.Message, "failed to restore scheduling", recoveryErr)
-				command, updateErr := connection.Exec(ctx, `
-					UPDATE upstream_accounts SET
-					 health_state=CASE WHEN schedulable THEN 'failing' ELSE 'paused' END,
-					 consecutive_failures=0,last_probe_at=$2,last_probe_latency_ms=$3,last_success_at=$2,
-					 last_failure_reason=NULL,last_failure_http_status=NULL,last_error=$4,
-					 next_probe_at=$2::timestamptz+probe_interval_seconds*interval '1 second',updated_at=now()
-					WHERE id=$1 AND managed_hold AND applied_probe_sequence=$5 AND scheduling_generation=$6`,
-					work.ID, now, latency, result.Message, token.Sequence, token.SchedulingGeneration)
-				if updateErr != nil {
-					return errors.Join(recoveryErr, updateErr)
-				}
-				if command.RowsAffected() == 0 {
-					return errors.Join(recoveryErr, errors.New("managed hold disappeared while recording recovery failure"))
-				}
-				return recoveryErr
-			}
-
-			command, updateErr = connection.Exec(ctx, `
-				UPDATE upstream_accounts SET
-				 health_state='healthy',consecutive_failures=0,consecutive_recovery_successes=0,managed_hold=false,schedulable=true,
-				 last_probe_at=$2,last_probe_latency_ms=$3,last_success_at=$2,last_failure_reason=NULL,last_failure_http_status=NULL,last_error=NULL,
-				 next_probe_at=$2::timestamptz+probe_interval_seconds*interval '1 second',updated_at=now()
-				WHERE id=$1 AND managed_hold AND applied_probe_sequence=$4 AND scheduling_generation=$5`,
-				work.ID, now, latency, token.Sequence, token.SchedulingGeneration)
-			if updateErr != nil {
-				return updateErr
-			}
-			if command.RowsAffected() == 0 {
-				return errors.New("managed hold disappeared while completing recovery")
-			}
-			outcome.Restored = true
-			return nil
-		}
-
-		thresholdReached := state.ConsecutiveFailures+1 >= state.FailureThreshold
-		claimManagedHold := state.ManagedHold
-		if !state.ManagedHold && state.Schedulable && thresholdReached {
-			remote, getErr := client.GetAccount(ctx, work.RemoteID)
-			if getErr != nil {
-				controlWarning = getErr
-				result.Message = appendProbeControlError(result.Message, "could not read remote scheduling state", getErr)
-			} else if remote.Schedulable {
-				claimManagedHold = true
-			} else {
-				state.Schedulable = false
-			}
-		}
-
-		command, updateErr := connection.Exec(ctx, `
-			UPDATE upstream_accounts SET
-			 consecutive_failures=consecutive_failures+1,
-			 consecutive_recovery_successes=0,
-			 managed_hold=$7,
-			 schedulable=$8,
-			 health_state=CASE WHEN $7 AND managed_hold AND health_state='paused' THEN 'paused' ELSE 'failing' END,
-			 last_probe_at=$2,last_probe_latency_ms=$3,last_failure_at=$2,last_error=$4,last_failure_reason=$5,last_failure_http_status=$6,
-			 next_probe_at=$2::timestamptz+probe_interval_seconds*interval '1 second',applied_probe_sequence=$9,updated_at=now()
-			WHERE id=$1 AND deleted_at IS NULL AND applied_probe_sequence<$9 AND scheduling_generation=$10`,
-			work.ID, now, latency, result.Message, failureReason, failureHTTPStatus, claimManagedHold, state.Schedulable,
-			token.Sequence, token.SchedulingGeneration)
-		if updateErr != nil {
-			return updateErr
-		}
-		if command.RowsAffected() == 0 {
-			return errors.New("probe result became stale while recording failure")
-		}
-		if !claimManagedHold {
-			return nil
-		}
-
-		remote, getErr := client.GetAccount(ctx, work.RemoteID)
-		if getErr != nil {
-			controlWarning = getErr
-			result.Message = appendProbeControlError(result.Message, "could not read remote scheduling state", getErr)
-			_, updateErr = connection.Exec(ctx, `UPDATE upstream_accounts SET last_error=$2,updated_at=now() WHERE id=$1 AND managed_hold AND applied_probe_sequence=$3 AND scheduling_generation=$4`, work.ID, result.Message, token.Sequence, token.SchedulingGeneration)
-			return updateErr
-		}
-		if remote.Schedulable {
-			remote, getErr = client.SetSchedulable(ctx, work.RemoteID, false)
-			if getErr != nil {
-				controlWarning = getErr
-				result.Message = appendProbeControlError(result.Message, "failed to pause scheduling", getErr)
-				_, updateErr = connection.Exec(ctx, `UPDATE upstream_accounts SET last_error=$2,updated_at=now() WHERE id=$1 AND managed_hold AND applied_probe_sequence=$3 AND scheduling_generation=$4`, work.ID, result.Message, token.Sequence, token.SchedulingGeneration)
-				return updateErr
-			}
-		}
-		if remote.Schedulable {
-			controlWarning = errors.New("Sub2API did not persist the paused state")
-			result.Message = appendProbeControlError(result.Message, "failed to pause scheduling", controlWarning)
-			_, updateErr = connection.Exec(ctx, `UPDATE upstream_accounts SET last_error=$2,updated_at=now() WHERE id=$1 AND managed_hold AND applied_probe_sequence=$3 AND scheduling_generation=$4`, work.ID, result.Message, token.Sequence, token.SchedulingGeneration)
-			return updateErr
-		}
-		command, updateErr = connection.Exec(ctx, `UPDATE upstream_accounts SET health_state='paused',schedulable=false,last_error=$2,updated_at=now() WHERE id=$1 AND managed_hold AND applied_probe_sequence=$3 AND scheduling_generation=$4`, work.ID, result.Message, token.Sequence, token.SchedulingGeneration)
-		if updateErr != nil {
-			return updateErr
-		}
-		if command.RowsAffected() == 0 {
-			return errors.New("managed hold disappeared while completing pause")
-		}
-		outcome.Paused = true
-		return nil
-	})
-	outcome.Message = result.Message
-	status := "success"
-	if !result.Success {
-		status = "failed"
-	}
-	if controlSkipped {
-		status = "skipped"
-	}
-	auditDetail := map[string]any{"latency_ms": latency, "failure_reason": failureReason, "http_status": failureHTTPStatus, "paused": outcome.Paused, "restored": outcome.Restored, "kind": kind, "state_applied": !controlSkipped, "probe_sequence": token.Sequence}
-	if controlWarning != nil {
-		auditDetail["control_warning"] = truncateError(controlWarning)
-	}
+	_, err = a.db.Exec(persistenceCtx, `UPDATE upstream_accounts SET health_state=$2,last_probe_at=now(),last_probe_latency_ms=$3,last_success_at=CASE WHEN $4 THEN now() ELSE last_success_at END,last_failure_at=CASE WHEN NOT $4 THEN now() ELSE last_failure_at END,last_failure_reason=$5,last_failure_http_status=$6,last_error=CASE WHEN $4 THEN NULL ELSE $7 END,consecutive_failures=CASE WHEN $4 THEN 0 ELSE consecutive_failures+1 END,next_probe_at=now()+probe_interval_seconds*interval '1 second',applied_probe_sequence=$8 WHERE id=$1 AND applied_probe_sequence<$8 AND scheduling_generation=$9`, work.ID, map[bool]string{true: "healthy", false: "failing"}[result.Success], latency, result.Success, failureReason, failureHTTPStatus, result.Message, token.Sequence, token.SchedulingGeneration)
 	if err != nil {
-		auditDetail["control_error"] = truncateError(err)
+		return outcome, err
 	}
-	_ = a.audit(persistenceCtx, work.OwnerID, actorID, work.SiteID, work.ID, "account.probe", status, auditDetail)
+	_, err = a.db.Exec(persistenceCtx, `UPDATE sites SET next_reconcile_at=LEAST(next_reconcile_at,now()) WHERE id=$1`, work.SiteID)
+	_ = a.audit(persistenceCtx, work.OwnerID, actorID, work.SiteID, work.ID, "account.probe", "success", map[string]any{"success": result.Success, "first_content_ms": result.FirstContentMS, "duration_ms": result.DurationMS, "stream_complete": result.StreamComplete, "model": model, "actual_model": result.ActualModel})
 	return outcome, err
 }
 
@@ -1134,20 +953,27 @@ func (a *App) runRateSync(ctx context.Context, work AccountWork, actorID string)
 	if !isFinite(outcome.EffectiveRate) || outcome.EffectiveRate < 0 {
 		return outcome, errors.New("源站返回了无效倍率")
 	}
-	remote, err := client.UpdateAccount(timeoutCtx, work.RemoteID, upstream.AccountUpdate{RateMultiplier: &outcome.EffectiveRate})
-	if err != nil {
-		a.recordRateFailure(ctx, work, err)
-		return outcome, err
+	var oldRate *float64
+	priceErr := a.db.QueryRow(ctx, `SELECT effective_rate FROM upstream_price_history WHERE account_id=$1 ORDER BY checked_at DESC LIMIT 1`, work.ID).Scan(&oldRate)
+	if priceErr != nil && !errors.Is(priceErr, pgx.ErrNoRows) {
+		return outcome, priceErr
 	}
-	if remote.RateMultiplier == nil || math.Abs(*remote.RateMultiplier-outcome.EffectiveRate) > 1e-7 {
-		err := errors.New("Sub2API 未持久化账号倍率")
-		a.recordRateFailure(ctx, work, err)
-		return outcome, err
+	if oldRate == nil || math.Abs(*oldRate-outcome.EffectiveRate) > 1e-7 {
+		_, err = a.db.Exec(ctx, `INSERT INTO upstream_price_history(id,account_id,source_rate,effective_rate,endpoint) VALUES($1,$2,$3,$4,$5)`, uuid.NewString(), work.ID, outcome.SourceRate, outcome.EffectiveRate, outcome.Endpoint)
+		if err != nil {
+			return outcome, err
+		}
+		if oldRate != nil {
+			_, err = a.db.Exec(ctx, `INSERT INTO quality_notifications(id,owner_id,account_id,kind,message) VALUES($1,$2,$3,'price_change',$4)`, uuid.NewString(), work.OwnerID, work.ID, fmt.Sprintf("%s：成本倍率 %.4f → %.4f", work.Name, *oldRate, outcome.EffectiveRate))
+			if err != nil {
+				return outcome, err
+			}
+		}
 	}
 	isNewAPI := work.SourceType == "newapi"
 	_, err = a.db.Exec(ctx, `
 		UPDATE upstream_accounts SET
-		 rate_multiplier=$2,source_rate_multiplier=$3,source_rate_endpoint=$4,last_rate_sync_at=now(),
+		 observed_cost_rate=$2,source_rate_multiplier=$3,source_rate_endpoint=$4,last_rate_sync_at=now(),
 		 source_credential_state=CASE WHEN $5 THEN 'valid' ELSE source_credential_state END,
 		 source_credential_checked_at=CASE WHEN $5 THEN now() ELSE source_credential_checked_at END,
 		 next_rate_sync_at=now()+rate_sync_interval_seconds*interval '1 second',last_error=NULL,work_lease_until=NULL,updated_at=now()
@@ -1157,7 +983,7 @@ func (a *App) runRateSync(ctx context.Context, work AccountWork, actorID string)
 	}
 	_, _ = a.db.Exec(ctx, `UPDATE sites SET next_reconcile_at=LEAST(next_reconcile_at,now()) WHERE id=$1`, work.SiteID)
 	_ = a.audit(ctx, work.OwnerID, actorID, work.SiteID, work.ID, "account.rate_sync", "success", map[string]any{"source_rate": outcome.SourceRate, "effective_rate": outcome.EffectiveRate, "endpoint": outcome.Endpoint})
-	a.applyEnabledGroupRulesForSourceAccount(ctx, work.ID)
+
 	return outcome, nil
 }
 
@@ -1325,79 +1151,7 @@ type ReconcileResult struct {
 }
 
 func (a *App) reconcileSite(ctx context.Context, siteID, ownerFilter, actorID string) (ReconcileResult, error) {
-	site, err := a.siteSecret(ctx, siteID, ownerFilter)
-	if err != nil {
-		return ReconcileResult{}, err
-	}
-	var start, step int
-	var cacheEnabled bool
-	var rateWeight, cacheWeight float64
-	if err := a.db.QueryRow(ctx, `SELECT priority_start,priority_step,cache_rate_priority_enabled,rate_priority_weight,cache_rate_priority_weight FROM sites WHERE id=$1`, siteID).Scan(&start, &step, &cacheEnabled, &rateWeight, &cacheWeight); err != nil {
-		return ReconcileResult{}, err
-	}
-	if cacheEnabled {
-		if actorID != "" {
-			if sampleErr := a.sampleSiteCacheRates(ctx, siteID, ownerFilter); sampleErr != nil && ctx.Err() == nil {
-				a.logger.Warn("cache rate sample before reconcile failed", slog.String("site_id", siteID), slog.Any("error", sampleErr))
-			}
-		}
-	}
-	rows, err := a.db.Query(ctx, `
-		SELECT a.id,a.remote_id,a.name,a.priority,a.rate_multiplier,a.priority_enabled,a.guard_enabled,a.guard_operator,a.guard_priority,a.guard_holding,a.guard_restore_priority,a.cache_rate,
-		COALESCE((SELECT jsonb_agg(jsonb_build_object('id',g.id,'remote_id',g.remote_id,'name',g.name,'rate_multiplier',g.rate_multiplier,'priority',m.group_priority)) FROM account_group_memberships m JOIN upstream_groups g ON g.id=m.group_id WHERE m.account_id=a.id AND g.deleted_at IS NULL),'[]'::jsonb)
-		FROM upstream_accounts a WHERE a.site_id=$1 AND a.deleted_at IS NULL AND (a.priority_enabled OR a.guard_enabled OR a.guard_holding)`, siteID)
-	if err != nil {
-		return ReconcileResult{}, err
-	}
-	accounts := make([]reconcileAccount, 0)
-	for rows.Next() {
-		var account reconcileAccount
-		var groups []byte
-		if err := rows.Scan(&account.ID, &account.RemoteID, &account.Name, &account.Priority, &account.Rate, &account.PriorityEnabled, &account.GuardEnabled, &account.GuardOperator, &account.GuardPriority, &account.GuardHolding, &account.RestorePriority, &account.CacheRate, &groups); err != nil {
-			rows.Close()
-			return ReconcileResult{}, err
-		}
-		_ = json.Unmarshal(groups, &account.Groups)
-		account.Desired = account.Priority
-		accounts = append(accounts, account)
-	}
-	rows.Close()
-
-	buildReconcilePlanWithOptions(accounts, reconcilePlanOptions{Start: start, Step: step, CacheEnabled: cacheEnabled, RateWeight: rateWeight, CacheWeight: cacheWeight})
-
-	client, err := a.sub2Client(site)
-	if err != nil {
-		return ReconcileResult{}, err
-	}
-	result := ReconcileResult{Evaluated: len(accounts)}
-	for _, account := range accounts {
-		if account.Desired == account.Priority && account.Violation == account.GuardHolding {
-			continue
-		}
-		if account.Desired != account.Priority {
-			requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			remote, updateErr := client.UpdateAccount(requestCtx, account.RemoteID, upstream.AccountUpdate{Priority: &account.Desired})
-			cancel()
-			if updateErr != nil || remote.Priority != account.Desired {
-				result.Failed++
-				message := "Sub2API did not persist priority"
-				if updateErr != nil {
-					message = updateErr.Error()
-				}
-				_ = a.audit(ctx, site.OwnerID, actorID, siteID, account.ID, "account.priority.reconcile", "failed", map[string]any{"error": message, "desired": account.Desired})
-				continue
-			}
-			result.Changed++
-		}
-		_, updateErr := a.db.Exec(ctx, `UPDATE upstream_accounts SET priority=$2,guard_restore_priority=CASE WHEN $3 AND NOT guard_holding THEN priority ELSE guard_restore_priority END,guard_holding=$3,updated_at=now() WHERE id=$1`, account.ID, account.Desired, account.Violation)
-		if updateErr != nil {
-			result.Failed++
-			continue
-		}
-		_ = a.audit(ctx, site.OwnerID, actorID, siteID, account.ID, "account.priority.reconcile", "success", map[string]any{"before": account.Priority, "after": account.Desired, "guard": account.Violation})
-	}
-	_, _ = a.db.Exec(ctx, `UPDATE sites SET last_reconcile_at=now(),next_reconcile_at=now()+reconcile_interval_seconds*interval '1 second',reconcile_lease_until=NULL,updated_at=now() WHERE id=$1`, siteID)
-	return result, nil
+	return a.qualityReconcileSite(ctx, siteID, ownerFilter, actorID)
 }
 
 func buildReconcilePlan(accounts []reconcileAccount, start, step int) {

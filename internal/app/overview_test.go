@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/langrenjh-alt/S2AM-GO/internal/auditlog"
+	"sub2api-upstream-manager/internal/auditlog"
 )
 
 func TestEventPageParameter(t *testing.T) {

@@ -1,0 +1,26 @@
+[Unit]
+Description=Sub2API Upstream Manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=upstream-manager
+Group=upstream-manager
+WorkingDirectory=/opt/upstream-manager
+EnvironmentFile=/etc/upstream-manager.env
+Environment=S2AM_LOG_DIR=/var/lib/upstream-manager/logs
+ExecStart=/opt/upstream-manager/upstream-manager
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+StateDirectory=upstream-manager
+ReadWritePaths=/var/lib/upstream-manager
+
+[Install]
+WantedBy=multi-user.target

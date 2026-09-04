@@ -33,6 +33,8 @@ func (s *Scheduler) Run(ctx context.Context) {
 		defer s.wg.Done()
 		s.app.runAccountBalanceRefresher(ctx)
 	}()
+	s.wg.Add(1)
+	go func() { defer s.wg.Done(); s.app.runQualityNotifications(ctx) }()
 	s.cleanup(ctx)
 	ticker := time.NewTicker(time.Second)
 	cleanup := time.NewTicker(24 * time.Hour)
@@ -167,6 +169,7 @@ func (s *Scheduler) execute(ctx context.Context, task scheduledTask) {
 			_, err = s.app.runRateSync(ctx, work, "")
 		}
 		if err == nil && task.Kind == "probe" {
+			_ = s.app.sampleQualityTraffic(ctx, work)
 			_, err = s.app.db.Exec(ctx, `UPDATE upstream_accounts SET work_lease_until=NULL WHERE id=$1`, task.ID)
 		}
 		if err != nil {
@@ -186,6 +189,8 @@ func (s *Scheduler) execute(ctx context.Context, task scheduledTask) {
 func (s *Scheduler) cleanup(ctx context.Context) {
 	_, _ = s.app.db.Exec(ctx, `DELETE FROM sessions WHERE expires_at<now()`)
 	_, _ = s.app.db.Exec(ctx, `DELETE FROM probe_attempts WHERE created_at<now()-interval '90 days'`)
+	_, _ = s.app.db.Exec(ctx, `DELETE FROM quality_decisions WHERE created_at<now()-interval '90 days'`)
+	_, _ = s.app.db.Exec(ctx, `DELETE FROM quality_notifications WHERE created_at<now()-interval '90 days'`)
 	_, _ = s.app.db.Exec(ctx, `DELETE FROM account_cache_samples WHERE sampled_at<now()-interval '48 hours'`)
 	_, _ = s.app.db.Exec(ctx, `DELETE FROM auth_throttles WHERE updated_at<now()-interval '24 hours'`)
 	s.purgeAuditLogs(ctx)

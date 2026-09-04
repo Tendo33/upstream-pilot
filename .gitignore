@@ -12,3 +12,11 @@ coverage/
 *.log
 *.test
 coverage.out
+
+*.tsbuildinfo
+/.local/
+/artifacts/
+
+/.playwright-cli/
+/output/
+/.impeccable/review/

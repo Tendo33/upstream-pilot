@@ -7,10 +7,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/langrenjh-alt/S2AM-GO/internal/auditlog"
-	"github.com/langrenjh-alt/S2AM-GO/internal/config"
-	"github.com/langrenjh-alt/S2AM-GO/internal/secret"
-	"github.com/langrenjh-alt/S2AM-GO/internal/upstream"
+	"sub2api-upstream-manager/internal/auditlog"
+	"sub2api-upstream-manager/internal/config"
+	"sub2api-upstream-manager/internal/secret"
+	"sub2api-upstream-manager/internal/upstream"
 )
 
 type App struct {
@@ -22,6 +22,7 @@ type App struct {
 	auditLog             *auditlog.Store
 	logger               *slog.Logger
 	balanceRefreshSignal chan struct{}
+	controlSlots         chan struct{}
 }
 
 func New(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error) {
@@ -43,6 +44,7 @@ func New(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error)
 		auditLog:             auditStore,
 		logger:               logger,
 		balanceRefreshSignal: make(chan struct{}, 1),
+		controlSlots:         make(chan struct{}, 4),
 	}
 	if err := application.migrateLegacyAuditEvents(context.Background()); err != nil {
 		return nil, err

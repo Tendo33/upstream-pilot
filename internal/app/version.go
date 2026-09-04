@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/mod/semver"
 
-	buildversion "github.com/langrenjh-alt/S2AM-GO/internal/version"
+	buildversion "sub2api-upstream-manager/internal/version"
 )
 
 const (
@@ -55,15 +55,9 @@ func newVersionChecker(client *http.Client) *versionChecker {
 }
 
 func (a *App) versionStatusHandler(w http.ResponseWriter, r *http.Request) error {
-	checker := a.versions
-	if checker == nil {
-		checker = newVersionChecker(a.httpClient)
-	}
-	status, err := checker.status(r.Context())
-	if err != nil && a.logger != nil {
-		a.logger.Warn("GitHub release check failed", "error", err)
-	}
-	writeData(w, http.StatusOK, status)
+	// This fork has no remote release source yet; never advertise upstream
+	// S2AM releases as upgrades for this application's independently changed code.
+	writeData(w, http.StatusOK, versionStatus{CurrentVersion: buildversion.Version, Commit: buildversion.Commit, BuildTime: buildversion.BuildTime, CheckedAt: time.Now().UTC()})
 	return nil
 }
 

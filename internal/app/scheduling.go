@@ -82,7 +82,8 @@ func (a *App) updateAccountScheduling(w http.ResponseWriter, r *http.Request) er
 		if command.RowsAffected() == 0 {
 			return fmt.Errorf("account disappeared while updating scheduling")
 		}
-		return nil
+		_, updateErr = a.db.Exec(requestCtx, `UPDATE quality_states SET owned_pause=false WHERE account_id=$1`, accountID)
+		return updateErr
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -157,6 +158,15 @@ func (c *pgxAccountSchedulingLockConnection) Discard(ctx context.Context) error 
 }
 
 func (a *App) withAccountSchedulingLock(ctx context.Context, accountID string, operation func(*pgxpool.Conn) error) error {
+	// Reserve pool headroom for queries performed while a session lock is held.
+	if a.controlSlots != nil {
+		select {
+		case a.controlSlots <- struct{}{}:
+			defer func() { <-a.controlSlots }()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	first, second, err := accountSchedulingLockKeys(accountID)
 	if err != nil {
 		return err

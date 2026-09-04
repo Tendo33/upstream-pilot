@@ -15,7 +15,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5"
 
-	webassets "github.com/langrenjh-alt/S2AM-GO/internal/web"
+	webassets "sub2api-upstream-manager/internal/web"
 )
 
 type contextKey string
@@ -61,6 +61,15 @@ func (a *App) Router() http.Handler {
 			protected.Post("/auth/logout", a.wrap(a.logout))
 			protected.Get("/version", a.wrap(a.versionStatusHandler))
 			protected.Get("/overview", a.wrap(a.overview))
+			protected.Get("/quality", a.wrap(a.qualityListHandler))
+			protected.Get("/quality/groups", a.wrap(a.qualityGroupHandler))
+			protected.Get("/quality/alerts", a.wrap(a.qualityAlertsHandler))
+			protected.Put("/quality/alerts", a.wrap(a.qualityAlertsHandler))
+			protected.Post("/quality/alerts/test", a.wrap(a.qualityAlertTestHandler))
+			protected.Put("/quality/{accountID}/policy", a.wrap(a.qualityPolicyHandler))
+			protected.Post("/quality/{accountID}/evaluate", a.wrap(a.qualityEvaluateHandler))
+			protected.Post("/quality/{accountID}/release", a.wrap(a.qualityReleaseHandler))
+			protected.Get("/quality/{accountID}/history", a.wrap(a.qualityHistoryHandler))
 			protected.Get("/sites", a.wrap(a.listSites))
 			protected.Post("/sites", a.wrap(a.createSite))
 			protected.Route("/sites/{siteID}", func(site chi.Router) {

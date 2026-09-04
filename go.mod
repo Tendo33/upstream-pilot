@@ -1,4 +1,4 @@
-module github.com/langrenjh-alt/S2AM-GO
+module sub2api-upstream-manager
 
 go 1.24.0
 

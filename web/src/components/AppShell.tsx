@@ -28,7 +28,8 @@ interface AppShellProps {
 }
 
 const commonLinks = [
-  { to: "/", label: "总览", icon: LayoutDashboard, end: true },
+  { to: "/", label: "质量", icon: Activity, end: true },
+  { to: "/overview", label: "总览", icon: LayoutDashboard },
   { to: "/sites", label: "站点", icon: Server },
   { to: "/accounts", label: "账号", icon: Database },
   { to: "/groups", label: "分组", icon: Layers3 },
@@ -199,7 +200,7 @@ export function AppShell({ user, dark, onToggleTheme, onLogout, children }: AppS
                       rel="noopener noreferrer"
                       title={`提交 ${versionStatus.commit} · 构建时间 ${versionStatus.build_time}`}
                     >
-                      <span>S2AM-GO <strong>{versionStatus.current_version}</strong></span>
+                      <span>Upstream Manager <strong>{versionStatus.current_version}</strong></span>
                       {versionStatus.update_available && versionStatus.latest_version && (
                         <span className="top-nav-version-update">
                           可更新至 {versionStatus.latest_version}
@@ -227,9 +228,9 @@ export function AppShell({ user, dark, onToggleTheme, onLogout, children }: AppS
 
 function Brand() {
   return (
-    <Link className="brand top-nav-brand" to="/" aria-label="S2AM-GO 总览" title="S2AM-GO">
+    <Link className="brand top-nav-brand" to="/" aria-label="Upstream Manager" title="Upstream Manager">
       <span className="brand-mark"><span /></span>
-      <span className="brand-name">S2AM<span>-GO</span></span>
+      <span className="brand-name">Upstream<span> Manager</span></span>
     </Link>
   );
 }

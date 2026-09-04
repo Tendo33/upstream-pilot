@@ -12,10 +12,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/langrenjh-alt/S2AM-GO/internal/app"
-	"github.com/langrenjh-alt/S2AM-GO/internal/config"
-	"github.com/langrenjh-alt/S2AM-GO/internal/database"
-	"github.com/langrenjh-alt/S2AM-GO/internal/version"
+	"sub2api-upstream-manager/internal/app"
+	"sub2api-upstream-manager/internal/config"
+	"sub2api-upstream-manager/internal/database"
+	"sub2api-upstream-manager/internal/version"
 )
 
 func main() {
@@ -23,7 +23,7 @@ func main() {
 	migrateOnly := flag.Bool("migrate-only", false, "apply database migrations and exit")
 	flag.Parse()
 	if *showVersion {
-		fmt.Printf("S2AM-GO %s (%s, %s)\n", version.Version, version.Commit, version.BuildTime)
+		fmt.Printf("Sub2API Upstream Manager %s (%s, %s)\n", version.Version, version.Commit, version.BuildTime)
 		return
 	}
 

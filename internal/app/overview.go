@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/langrenjh-alt/S2AM-GO/internal/auditlog"
+	"sub2api-upstream-manager/internal/auditlog"
 )
 
 func (a *App) overview(w http.ResponseWriter, r *http.Request) error {

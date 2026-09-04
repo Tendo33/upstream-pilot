@@ -151,13 +151,18 @@ type AccountUpdate struct {
 }
 
 type ProbeResult struct {
-	Success     bool   `json:"success"`
-	Message     string `json:"message"`
-	LatencyMS   int    `json:"latency_ms"`
-	Model       string `json:"model,omitempty"`
-	HTTPStatus  *int   `json:"http_status,omitempty"`
-	Code        string `json:"code,omitempty"`
-	FailureData string `json:"failure_data,omitempty"`
+	ControlPlaneError bool   `json:"control_plane_error"`
+	FirstContentMS    *int   `json:"first_content_ms"`
+	DurationMS        int    `json:"duration_ms"`
+	ActualModel       string `json:"actual_model"`
+	StreamComplete    bool   `json:"stream_complete"`
+	Success           bool   `json:"success"`
+	Message           string `json:"message"`
+	LatencyMS         int    `json:"latency_ms"`
+	Model             string `json:"model,omitempty"`
+	HTTPStatus        *int   `json:"http_status,omitempty"`
+	Code              string `json:"code,omitempty"`
+	FailureData       string `json:"failure_data,omitempty"`
 }
 
 type AccountModel struct {
@@ -761,28 +766,7 @@ func (c *Sub2Client) SetSchedulable(ctx context.Context, accountID int64, enable
 }
 
 func (c *Sub2Client) TestAccount(ctx context.Context, accountID int64, model string) (ProbeResult, error) {
-	if accountID <= 0 {
-		return ProbeResult{}, errors.New("Sub2API account ID must be positive")
-	}
-	started := time.Now()
-	body := map[string]string{}
-	model = strings.TrimSpace(model)
-	if model != "" {
-		body["model_id"] = model
-	}
-	path := "/accounts/" + strconv.FormatInt(accountID, 10) + "/test"
-	raw, err := c.request(ctx, http.MethodPost, path, body, "text/event-stream, application/json")
-	if err != nil {
-		return ProbeResult{}, err
-	}
-	if envelopeErr := probeEnvelopeFailure(raw); envelopeErr != nil {
-		return ProbeResult{}, fmt.Errorf("Sub2API account test: %w", envelopeErr)
-	}
-	result := ParseProbeResponse(raw, int(time.Since(started).Milliseconds()))
-	if result.Model == "" {
-		result.Model = model
-	}
-	return result, nil
+	return c.streamAccountTest(ctx, accountID, strings.TrimSpace(model))
 }
 
 func (c *Sub2Client) ProbeBilling(ctx context.Context, accountID int64) (BillingResult, error) {

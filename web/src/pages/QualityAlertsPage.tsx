@@ -1,0 +1,14 @@
+import { useCallback, useEffect, useState } from "react";
+import { api, errorMessage, json } from "../api";
+import { Badge, Button, Field, Input, PageHeader, PageLoader, useToast } from "../components/ui";
+import { formatDate } from "../lib";
+
+type Alerts={enabled:boolean;webhook_configured:boolean;events:{id:string;kind:string;message:string;attempts:number;delivered_at:string|null;last_error:string;created_at:string}[]};
+export function QualityAlertsPage(){
+ const [data,setData]=useState<Alerts|null>(null),[enabled,setEnabled]=useState(false),[webhook,setWebhook]=useState(""),[busy,setBusy]=useState(false),[error,setError]=useState("");const {toast}=useToast();
+ const load=useCallback(async()=>{try{const value=await api<Alerts>("/quality/alerts");setData(value);setEnabled(value.enabled);setError("")}catch(e){setError(errorMessage(e))}},[]);
+ useEffect(()=>{void load()},[load]);
+ async function save(e:React.FormEvent){e.preventDefault();setBusy(true);try{await api("/quality/alerts",{method:"PUT",...json({enabled,webhook_url:webhook,clear_webhook:false})});setWebhook("");toast("通知设置已保存","success");await load()}catch(e){setError(errorMessage(e))}finally{setBusy(false)}}
+ async function test(){setBusy(true);try{await api("/quality/alerts/test",{method:"POST"});toast("测试通知已发送","success")}catch(e){setError(errorMessage(e))}finally{setBusy(false)}}
+ return <div className="page"><PageHeader title="质量通知" description="关注持续故障、恢复、低余额和采购价格变化。" actions={<Button onClick={()=>void load()}>刷新记录</Button>}/>{error&&<p role="alert" className="quality-error">{error}</p>}{!data&&!error?<PageLoader/>:<><form className="quality-editor" onSubmit={e=>void save(e)}><h2>通知接收设置</h2><Field label="Webhook 地址" hint={data?.webhook_configured?"已保存，留空保留现有地址。地址加密保存且不回显。":"支持企业微信群机器人或接收 JSON POST 的通用 Webhook。"}><Input type="url" autoComplete="off" value={webhook} placeholder="https://…" onChange={e=>setWebhook(e.target.value)}/></Field><label className="quality-checkboxes"><input type="checkbox" checked={enabled} onChange={e=>setEnabled(e.target.checked)}/>启用质量通知</label><p className="quality-note">相同状态持续期间不重复通知。发送失败最多重试五次，接收端可按 event_id 去重。</p><div className="quality-actions"><Button type="submit" variant="primary" loading={busy}>保存设置</Button><Button disabled={busy||!data?.webhook_configured} onClick={()=>void test()}>发送测试通知</Button></div></form><section className="quality-editor"><h2>最近事件与投递结果</h2>{data?.events.length===0?<p>暂无事件。探测到故障、恢复或价格变化后会在这里记录，即使通知尚未开启。</p>:data?.events.map(event=><article key={event.id} className="quality-notification"><div><Badge tone={event.delivered_at?"success":event.attempts>=5?"danger":"neutral"}>{event.delivered_at?"已送达":event.attempts>=5?"投递失败":enabled?"待投递":"未开启投递"}</Badge><span>{formatDate(event.created_at)}</span><span>尝试 {event.attempts} 次</span></div><p>{event.message}</p>{event.last_error&&<small>{event.last_error}</small>}</article>)}</section></>}</div>;
+}

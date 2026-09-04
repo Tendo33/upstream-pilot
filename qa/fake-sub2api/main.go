@@ -71,6 +71,13 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		write(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("/notify", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", 405)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("/control/reset", s.resetControl)
 	mux.HandleFunc("/control/stats", s.controlStats)
 	mux.HandleFunc("/control/", s.control)
@@ -133,7 +140,7 @@ func (s *state) admin(w http.ResponseWriter, r *http.Request) {
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/admin")
 	if strings.HasPrefix(path, "/accounts/") && strings.HasSuffix(path, "/test") && r.Method == http.MethodPost {
-		s.accountProbe(w, path)
+		s.accountProbe(w, r, path)
 		return
 	}
 	s.mu.Lock()
@@ -290,7 +297,7 @@ func (s *state) accountRoute(w http.ResponseWriter, r *http.Request, path string
 	}
 }
 
-func (s *state) accountProbe(w http.ResponseWriter, path string) {
+func (s *state) accountProbe(w http.ResponseWriter, r *http.Request, path string) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) != 3 {
 		write(w, http.StatusNotFound, map[string]any{"code": 404})
@@ -309,13 +316,28 @@ func (s *state) accountProbe(w http.ResponseWriter, path string) {
 	s.probeRequests[id]++
 	s.mu.Unlock()
 
-	if probeDelay > 0 {
-		time.Sleep(time.Duration(probeDelay) * time.Millisecond)
+	var input struct {
+		Model string `json:"model_id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&input)
+	if input.Model == "" {
+		input.Model = "fixture-default"
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
+	start, _ := json.Marshal(map[string]any{"type": "test_start", "model": input.Model})
+	fmt.Fprintf(w, "data: %s\n\n", start)
+	w.(http.Flusher).Flush()
+	delay := time.NewTimer(time.Duration(max(probeDelay, 30)) * time.Millisecond)
+	defer delay.Stop()
+	select {
+	case <-r.Context().Done():
+		return
+	case <-delay.C:
+	}
 	if probeSuccess {
-		fmt.Fprintln(w, "data: {\"type\":\"test_complete\",\"status\":\"succeeded\",\"success\":true,\"latency_ms\":12}")
-		fmt.Fprintln(w)
+		fmt.Fprint(w, "data: {\"type\":\"content\",\"text\":\"fixture response\"}\n\n")
+		w.(http.Flusher).Flush()
+		fmt.Fprint(w, "data: {\"type\":\"test_complete\",\"success\":true}\n\n")
 		return
 	}
 	failure := map[string]any{"type": "test_complete", "status": "failed", "success": false, "error": "simulated failure"}

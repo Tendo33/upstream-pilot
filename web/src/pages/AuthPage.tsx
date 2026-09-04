@@ -41,11 +41,11 @@ export function AuthPage({ initialized, submit }: AuthPageProps) {
     <main className="auth-page">
       <header className="auth-brand">
         <span className="brand-mark"><span /></span>
-        <span className="brand-name">S2AM<span>-GO</span></span>
+        <span className="brand-name">Upstream<span> Manager</span></span>
       </header>
       <section className="auth-panel">
         <div className="auth-icon"><ShieldCheck size={21} /></div>
-        <h1>{initialized ? "登录控制台" : "初始化 S2AM-GO"}</h1>
+        <h1>{initialized ? "登录控制台" : "初始化 Upstream Manager"}</h1>
         <p>{initialized ? "使用你的工作区账号继续" : "创建首个管理员账号"}</p>
         <form onSubmit={onSubmit} className="auth-form">
           <Field label="邮箱" required>
@@ -84,9 +84,9 @@ export function AuthPage({ initialized, submit }: AuthPageProps) {
         </form>
       </section>
       <footer className="auth-footer">
-        <span>Listening on :33777</span>
+        <span>上游质量与成本管理</span>
         <span className="auth-footer-separator" />
-        <span>PostgreSQL</span>
+        <span>默认仅观察</span>
       </footer>
     </main>
   );

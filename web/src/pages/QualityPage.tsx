@@ -1,0 +1,93 @@
+import { Activity, ArrowDownUp, BellRing, Download, RefreshCw, Settings2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { api, errorMessage, json } from "../api";
+import { Badge, Button, EmptyState, Field, Input, PageHeader, PageLoader, useToast } from "../components/ui";
+import { formatDate } from "../lib";
+import type { Account, Site } from "../types";
+
+type Policy = {
+ mode: "observe" | "priority"; slow_ms: number; failure_threshold: number; error_percent: number;
+ minimum_samples: number; recovery_samples: number; cooldown_seconds: number; fresh_seconds: number;
+ priority_step: number; max_penalty: number; low_balance: number | null; max_rate: number | null;
+ price_rise_percent: number; auto_pause: boolean;
+};
+type QualityState = {baseline_priority:number;last_applied_priority:number|null;desired_priority:number;tier:number;recovery_streak:number;status:string;reason:string;conflict:boolean;owned_pause:boolean};
+type Traffic = {status:string;message:string;model:string;total:number;failed:number;first_content_p95_ms:number|null;truncated:boolean};
+type QualityRow = {account:Account;policy:Policy;state:QualityState;first_content_p95_ms:number|null;sample_count:number;success_percent:number|null;balance:number|null;balance_unit:string;balance_at:string|null;balance_fresh:boolean;cost_rate:number|null;cost_fresh:boolean;traffic:Traffic|null;traffic_at:string|null};
+type Group = {model:string;success_percent:number|null;first_content_p95_ms:number|null;id:string;site_id:string;name:string;accounts:number;schedulable:number;healthy:number;degraded:number};
+type Page = {items:QualityRow[];total:number;page:number;page_size:number};
+type History = {probes:{created_at:string;success:boolean;first_content_ms:number|null;duration_ms:number;model:string;actual_model:string;stream_complete:boolean;message:string}[];prices:{checked_at:string;effective_rate:number;source_rate:number}[];decisions:{created_at:string;reason:string;before_priority:number;desired_priority:number;applied:boolean;error:string;mode:string}[]};
+const statusNames:Record<string,string>={healthy:"正常",degraded:"已降级",watching:"观察异常",unknown:"数据未知",conflict:"人工修改冲突"};
+const ms=(value:number|null|undefined)=>value==null?"—":`${(value/1000).toFixed(2)}s`;
+
+export function QualityPage(){
+ const [page,setPage]=useState(1),[site,setSite]=useState(""),[group,setGroup]=useState(""),[search,setSearch]=useState("");
+ const [groupModel,setGroupModel]=useState<string|null>(null);
+ const [data,setData]=useState<Page|null>(null),[groups,setGroups]=useState<Group[]>([]),[sites,setSites]=useState<Site[]>([]);
+ const [error,setError]=useState(""),[busy,setBusy]=useState(""),[selected,setSelected]=useState<QualityRow|null>(null);
+ const [history,setHistory]=useState<{row:QualityRow;data:History}|null>(null);
+ const {toast}=useToast();const request=useRef<AbortController|null>(null);
+ const load=useCallback(async()=>{
+  request.current?.abort();const controller=new AbortController();request.current=controller;
+  try{const query=new URLSearchParams({page:String(page),site_id:site,group_id:group,search});if(groupModel!==null)query.set("model",groupModel);
+   const [next,gr,st]=await Promise.all([api<Page>(`/quality?${query}`,{signal:controller.signal}),api<Group[]>("/quality/groups",{signal:controller.signal}),api<Site[]>("/sites",{signal:controller.signal})]);
+   if(!controller.signal.aborted){setData(next);setGroups(gr);setSites(st);setError("")}
+  }catch(e){if(!controller.signal.aborted)setError(errorMessage(e))}
+ },[page,site,group,search,groupModel]);
+ useEffect(()=>{void load();const timer=window.setInterval(()=>{if(!document.hidden)void load()},15000);return()=>{window.clearInterval(timer);request.current?.abort()}},[load]);
+ async function action(row:QualityRow,kind:"probe"|"evaluate"|"rate-sync"|"release"|"adopt"){
+  setBusy(`${row.account.id}:${kind}`);
+  try{
+   if(kind==="probe"||kind==="rate-sync"){
+    await api(`/accounts/${row.account.id}/${kind}`,{method:"POST"});
+    await api(`/quality/${row.account.id}/evaluate`,{method:"POST"});
+   }else if(kind==="release"||kind==="adopt"){
+    await api(`/quality/${row.account.id}/release`,{method:"POST",...json({restore:kind==="release"})});
+   }else await api(`/quality/${row.account.id}/evaluate`,{method:"POST"});
+   toast(kind==="probe"?"探测已完成，结果已记录":kind==="evaluate"?"已按当前模式评估":kind==="rate-sync"?"成本倍率已采集":"已停止接管","success");await load();
+  }catch(e){toast(errorMessage(e),"error")}finally{setBusy("")}
+ }
+ async function showHistory(row:QualityRow){setBusy(`${row.account.id}:history`);try{setHistory({row,data:await api<History>(`/quality/${row.account.id}/history`)})}catch(e){toast(errorMessage(e),"error")}finally{setBusy("")}}
+ return <div className="page">
+  <PageHeader title="上游质量" description="把慢、错误、余额和成本变化变成可解释的优先级调整。" actions={<><Link className="button button-secondary" to="/quality-alerts"><BellRing size={15}/>通知</Link><Button onClick={()=>void load()}><RefreshCw size={15}/>刷新</Button></>}/>
+  <div className="quality-intro"><Activity size={18}/><p><strong>默认只观察。</strong> 自动模式只调整优先级；账号停调单独开启。变慢或变贵的上游保留为备用。分组健康数仅代表已测账号，不代表供应商独立性或可承接容量。</p></div>
+  {error&&<div className="quality-error" role="alert">{error}<Button onClick={()=>void load()}>重试</Button></div>}
+  <section className="quality-groups" aria-label="分组备用情况">
+   {groups.filter(g=>!site||g.site_id===site).map(g=><button key={`${g.id}:${g.model}`} className={`quality-group ${group===g.id&&groupModel===g.model?"is-selected":""}`} onClick={()=>{const active=group===g.id&&groupModel===g.model;setGroup(active?"":g.id);setGroupModel(active?null:g.model);setPage(1)}}>
+    <strong>{g.name} · {g.model||"默认模型"}</strong><span>{g.healthy} 个近期健康 / {g.accounts} 个上游</span><Badge tone={g.healthy>=2?"success":"warning"}>{g.healthy>=2?"有健康备用":g.healthy===1?"仅一个健康上游":"暂无健康证据"}</Badge><span>首字 P95 {ms(g.first_content_p95_ms)} · 探测成功率 {g.success_percent==null?"—":`${g.success_percent}%`}</span>
+   </button>)}
+  </section>
+  <div className="quality-filters"><label>站点<select value={site} onChange={e=>{setSite(e.target.value);setGroup("");setGroupModel(null);setPage(1)}}><option value="">全部站点</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label>搜索<Input value={search} placeholder="上游名称或账号 ID" onChange={e=>{setSearch(e.target.value);setPage(1)}}/></label>{group&&<Button onClick={()=>{setGroup("");setGroupModel(null)}}>清除分组筛选</Button>}<span>{data?.total??0} 个上游 · 每 15 秒刷新</span></div>
+  {!data&&!error?<PageLoader/>:data?.items.length===0?<EmptyState title="还没有上游数据" description="添加 Sub2API 站点并同步账号，然后选择模型并开启定时探测。" action={<Link className="button button-primary" to="/sites">添加站点</Link>}/>:<div className="quality-list" aria-label="上游质量列表">
+   {data?.items.map(row=><article className="quality-row" key={row.account.id}>
+    <div className="quality-account"><strong>{row.account.name}</strong><span>{row.account.site_name} · #{row.account.remote_id} · {row.account.probe_model||"默认模型"}</span><div><Badge tone={row.state.status==="healthy"?"success":row.state.status==="conflict"?"danger":row.state.status==="unknown"?"neutral":"warning"}>{statusNames[row.state.status]??row.state.status}</Badge><Badge>{row.policy.mode==="observe"?"仅观察":"自动优先级"}</Badge>{!row.account.health_enabled&&<Badge>定时探测未开启</Badge>}</div></div>
+    <dl className="quality-metrics"><div><dt>首字 P95</dt><dd>{ms(row.first_content_p95_ms)}</dd></div><div><dt>探测成功率</dt><dd>{row.success_percent==null?"—":`${row.success_percent.toFixed(1)}%`}<small>{row.sample_count} 个有效样本</small></dd></div><div><dt>余额</dt><dd>{row.balance==null?"—":`${row.balance.toFixed(2)} ${row.balance_unit}`}<small>{row.balance_fresh?"采集有效":"未知或已过期"}</small></dd></div><div><dt>采购倍率</dt><dd>{row.cost_rate==null?"—":row.cost_rate.toFixed(4)}<small>{row.cost_fresh?"采集有效":"未知或已过期"}</small></dd></div><div><dt>当前 → 建议优先级</dt><dd>{row.account.priority} → {row.state.desired_priority}<small>人工基准 {row.state.baseline_priority}</small></dd></div></dl>
+    <p className="quality-reason">{row.state.reason}</p>
+    <p className="quality-traffic">真实请求：{row.traffic?.status==="ok"?`${row.traffic.total-row.traffic.failed}/${row.traffic.total} 成功${row.traffic.truncated?"（最近 300 条）":""} · 首字 P95 ${ms(row.traffic.first_content_p95_ms)}`:row.traffic?.message||"尚未采集；开启定时探测后自动采集"}{row.traffic_at&&` · ${formatDate(row.traffic_at)}`}</p>
+    <div className="quality-actions"><Button size="sm" disabled={!!busy} onClick={()=>void action(row,"probe")} loading={busy===`${row.account.id}:probe`}><Activity size={14}/>立即探测</Button><Button size="sm" disabled={!!busy} onClick={()=>void action(row,"rate-sync")}>采集倍率</Button><Button size="sm" disabled={!!busy} onClick={()=>void action(row,"evaluate")}><ArrowDownUp size={14}/>评估策略</Button><Button size="sm" onClick={()=>{setSelected(row);setHistory(null)}}><Settings2 size={14}/>配置</Button><Button size="sm" disabled={!!busy} onClick={()=>void showHistory(row)}>历史</Button>{row.state.last_applied_priority!=null&&<Button size="sm" disabled={!!busy} onClick={()=>void action(row,"release")}>还原基准并停止</Button>}{(row.state.conflict||row.policy.mode==="priority")&&<Button size="sm" disabled={!!busy} onClick={()=>void action(row,"adopt")}>保留当前值并停止</Button>}</div>
+   </article>)}
+  </div>}
+  {data&&data.total>data.page_size&&<div className="quality-pagination"><Button disabled={page<=1} onClick={()=>setPage(p=>p-1)}>上一页</Button><span>第 {page} 页</span><Button disabled={page*data.page_size>=data.total} onClick={()=>setPage(p=>p+1)}>下一页</Button></div>}
+  {selected&&<PolicyEditor key={selected.account.id} row={selected} close={()=>setSelected(null)} saved={()=>{setSelected(null);void load()}}/>}
+  {history&&<HistoryPanel row={history.row} history={history.data} close={()=>setHistory(null)}/>}
+ </div>;
+}
+
+function PolicyEditor({row,close,saved}:{row:QualityRow;close:()=>void;saved:()=>void}){
+ const [policy,setPolicy]=useState({...row.policy});const [enabled,setEnabled]=useState(row.account.health_enabled),[model,setModel]=useState(row.account.probe_model??""),[interval,setIntervalValue]=useState(row.account.probe_interval_seconds),[timeout,setTimeoutValue]=useState(row.account.probe_timeout_seconds),[rate,setRate]=useState(row.account.rate_sync_enabled);
+ const [saving,setSaving]=useState(false),[error,setError]=useState("");const ref=useRef<HTMLElement>(null);
+ useEffect(()=>{ref.current?.scrollIntoView({behavior:"smooth",block:"start"});ref.current?.focus()},[]);
+ const numbers:{key:keyof Policy;label:string;hint?:string;min:number;max:number}[]=[{key:"slow_ms",label:"首字延迟阈值（毫秒）",min:100,max:600000},{key:"failure_threshold",label:"连续失败阈值",min:2,max:100},{key:"error_percent",label:"错误率阈值（%）",min:1,max:100},{key:"minimum_samples",label:"统计最少样本",min:2,max:1000},{key:"recovery_samples",label:"每级恢复连续样本",min:2,max:100},{key:"cooldown_seconds",label:"恢复冷却（秒）",min:0,max:86400},{key:"fresh_seconds",label:"证据有效期（秒）",min:30,max:86400},{key:"priority_step",label:"每级优先级降幅",min:1,max:100000},{key:"max_penalty",label:"最大降幅",min:1,max:1000000},{key:"price_rise_percent",label:"涨价提醒阈值（%）",min:0,max:10000}];
+ async function save(e:React.FormEvent){e.preventDefault();setSaving(true);setError("");try{await api(`/quality/${row.account.id}/policy`,{method:"PUT",...json({...policy,monitoring:{enabled,model,interval_seconds:interval,timeout_seconds:timeout,collect_rate:rate}})});saved()}catch(e){setError(errorMessage(e))}finally{setSaving(false)}}
+ return <section ref={ref} tabIndex={-1} className="quality-editor" aria-label={`${row.account.name} 的策略配置`}><div className="quality-section-heading"><h2>{row.account.name} · 策略配置</h2><Button onClick={close}>关闭</Button></div><form onSubmit={e=>void save(e)}>
+  <div className="quality-form-grid"><Field label="运行模式"><select value={policy.mode} onChange={e=>setPolicy({...policy,mode:e.target.value as Policy["mode"]})}><option value="observe">仅观察：记录建议，不写回</option><option value="priority">自动：按策略调整优先级</option></select></Field><Field label="测试模型" hint="使用这个账号实际支持的模型"><Input value={model} maxLength={256} placeholder="例如 gpt-5.5" onChange={e=>setModel(e.target.value)}/></Field><Field label="探测间隔（秒）"><Input type="number" min={10} max={86400} value={interval} onChange={e=>setIntervalValue(Number(e.target.value))}/></Field><Field label="探测超时（秒）"><Input type="number" min={3} max={600} value={timeout} onChange={e=>setTimeoutValue(Number(e.target.value))}/></Field>{numbers.map(f=><Field key={f.key} label={f.label} hint={f.hint}><Input type="number" min={f.min} max={f.max} value={Number(policy[f.key])} onChange={e=>setPolicy({...policy,[f.key]:Number(e.target.value)})}/></Field>)}<Field label="低余额阈值" hint="按上游返回的余额单位；留空关闭"><Input type="number" min={0} step="any" value={policy.low_balance??""} onChange={e=>setPolicy({...policy,low_balance:e.target.value===""?null:Number(e.target.value)})}/></Field><Field label="最高采购倍率" hint="留空关闭绝对成本上限"><Input type="number" min={0} step="any" value={policy.max_rate??""} onChange={e=>setPolicy({...policy,max_rate:e.target.value===""?null:Number(e.target.value)})}/></Field></div>
+  <div className="quality-checkboxes"><label><input type="checkbox" checked={enabled} onChange={e=>setEnabled(e.target.checked)}/>开启后台定时探测</label><label><input type="checkbox" checked={rate} onChange={e=>setRate(e.target.checked)}/>定时采集采购倍率</label><label><input type="checkbox" checked={policy.auto_pause} onChange={e=>setPolicy({...policy,auto_pause:e.target.checked})}/>自动模式下，确认无余额或认证失效时暂停；恢复后启用</label></div><p className="quality-note">跨组账号共用一个优先级。停调前检查各分组健康备用；人工暂停的账号不会被自动启用。采购倍率采集不会改变用户售价。</p>{error&&<p role="alert" className="quality-error">{error}</p>}<Button type="submit" variant="primary" loading={saving}>保存策略</Button>
+ </form></section>
+}
+
+function HistoryPanel({row,history,close}:{row:QualityRow;history:History;close:()=>void}){
+ const ref=useRef<HTMLElement>(null);useEffect(()=>{ref.current?.scrollIntoView({behavior:"smooth",block:"start"});ref.current?.focus()},[]);
+ function download(){const url=URL.createObjectURL(new Blob([JSON.stringify(history,null,2)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download=`upstream-${row.account.remote_id}-history.json`;a.click();URL.revokeObjectURL(url)}
+ return <section className="quality-editor" tabIndex={-1} ref={ref}><div className="quality-section-heading"><h2>{row.account.name} · 最近历史</h2><div className="quality-actions"><Button onClick={download}><Download size={15}/>导出 JSON</Button><Button onClick={close}>关闭</Button></div></div><h3>探测记录</h3>{history.probes.length===0?<p>暂无探测记录。</p>:<div className="quality-table-scroll"><table><thead><tr><th>时间</th><th>模型 / 实际模型</th><th>首字 / 总耗时</th><th>完整结束</th><th>结果</th></tr></thead><tbody>{history.probes.map((p,i)=><tr key={`${p.created_at}:${i}`}><td>{formatDate(p.created_at)}</td><td>{p.model||"默认"}<small>{p.actual_model||"未报告"}</small></td><td>{ms(p.first_content_ms)} / {ms(p.duration_ms)}</td><td>{p.stream_complete?"是":"否"}</td><td>{p.success?"成功":p.message}</td></tr>)}</tbody></table></div>}<h3>优先级决策</h3>{history.decisions.length===0?<p>暂无策略决策。</p>:history.decisions.map((d,i)=><div className="quality-history-line" key={`${d.created_at}:${i}`}><span>{formatDate(d.created_at)}</span><strong>{d.before_priority} → {d.desired_priority}</strong><span>{d.applied?"已写回":d.error?"写回失败":"建议"} · {d.reason}</span></div>)}<h3>采购价格变化</h3>{history.prices.length===0?<p>暂无价格记录。</p>:history.prices.map((p,i)=><div className="quality-history-line" key={`${p.checked_at}:${i}`}><span>{formatDate(p.checked_at)}</span><strong>{p.effective_rate.toFixed(4)}</strong><span>源倍率 {p.source_rate.toFixed(4)}</span></div>)}</section>
+}

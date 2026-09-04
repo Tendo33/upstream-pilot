@@ -1,5 +1,4 @@
 import {
-  ArrowDownUp,
   CircleAlert,
   Database,
   ExternalLink,
@@ -15,8 +14,6 @@ import {
   RefreshCw,
   Search,
   ShieldAlert,
-  ShieldCheck,
-  SlidersHorizontal,
   WalletCards,
   X,
 } from "lucide-react";
@@ -442,9 +439,7 @@ export function AccountsPage() {
               </div>
               <div className="automation-switches" role="cell">
                 <AutomationToggle icon={<HeartPulse size={15} />} label="测活" checked={account.health_enabled} disabled={busy.startsWith(account.id)} onChange={(value) => void quickToggle(account, "health_enabled", value)} />
-                <AutomationToggle icon={<RefreshCw size={15} />} label="倍率同步" checked={account.rate_sync_enabled} disabled={busy.startsWith(account.id)} onChange={(value) => void quickToggle(account, "rate_sync_enabled", value)} />
-                <AutomationToggle icon={<ArrowDownUp size={15} />} label="全局排序" checked={account.priority_enabled} disabled={busy.startsWith(account.id)} onChange={(value) => void quickToggle(account, "priority_enabled", value)} />
-                <AutomationToggle icon={<ShieldCheck size={15} />} label="分组保护" checked={account.guard_enabled} disabled={busy.startsWith(account.id)} onChange={(value) => void quickToggle(account, "guard_enabled", value)} />
+                <AutomationToggle icon={<RefreshCw size={15} />} label="倍率采集" checked={account.rate_sync_enabled} disabled={busy.startsWith(account.id)} onChange={(value) => void quickToggle(account, "rate_sync_enabled", value)} />
               </div>
               <div className="account-actions" role="cell">
                 <IconButton label="立即测活" onClick={() => void runAccountAction(account, "probe")} disabled={Boolean(busy)}>
@@ -587,8 +582,6 @@ function BulkAccountSettingsModal({ accounts, open, onClose, onSaved }: {
     && account.recovery_success_threshold === accounts[0].recovery_success_threshold
     && (account.probe_model ?? "") === (accounts[0].probe_model ?? ""));
   const rateSyncMixed = !accounts.every((account) => account.rate_sync_enabled === accounts[0].rate_sync_enabled && account.rate_sync_interval_seconds === accounts[0].rate_sync_interval_seconds);
-  const priorityMixed = !accounts.every((account) => account.priority_enabled === accounts[0].priority_enabled);
-  const guardMixed = !accounts.every((account) => account.guard_enabled === accounts[0].guard_enabled && account.guard_operator === accounts[0].guard_operator && account.guard_priority === accounts[0].guard_priority);
 
   function update<K extends keyof BulkSettingsValues>(key: K, value: BulkSettingsValues[K]) {
     setValues((current) => current ? { ...current, [key]: value } : current);
@@ -668,55 +661,23 @@ function BulkAccountSettingsModal({ accounts, open, onClose, onSaved }: {
           <div className="form-grid four">
             <Field label="探测间隔" hint="10 至 86400 秒"><NumberInput value={values.probe_interval_seconds} min={10} max={86400} onChange={(value) => update("probe_interval_seconds", value)} /></Field>
             <Field label="超时时间" hint="3 至 600 秒"><NumberInput value={values.probe_timeout_seconds} min={3} max={600} onChange={(value) => update("probe_timeout_seconds", value)} /></Field>
-            <Field label="失败阈值" hint="达到后暂停调度"><NumberInput value={values.failure_threshold} min={1} max={100} onChange={(value) => update("failure_threshold", value)} /></Field>
-            <Field label="恢复成功阈值" hint="连续正常后恢复调度"><NumberInput value={values.recovery_success_threshold} min={1} max={100} onChange={(value) => update("recovery_success_threshold", value)} /></Field>
             <Field className="probe-model-field" label="探测模型" hint="留空使用各上游默认"><Input value={values.probe_model} maxLength={200} onChange={(event) => update("probe_model", event.target.value)} /></Field>
           </div>
         </BulkAutomationSection>
 
         <BulkAutomationSection
           icon={<RefreshCw size={17} />}
-          title="倍率同步"
+          title="倍率采集"
           meta={applied.rateSync ? (values.rate_sync_enabled ? `每 ${values.rate_sync_interval_seconds} 秒` : "将停用") : rateSyncMixed ? "当前值不一致" : "当前值一致"}
           applied={applied.rateSync}
           onApply={(checked) => setSection("rateSync", checked)}
         >
-          <div className="setting-inline"><span>启用倍率同步</span><Switch checked={values.rate_sync_enabled} onChange={(checked) => update("rate_sync_enabled", checked)} label="启用倍率同步" /></div>
+          <div className="setting-inline"><span>启用倍率采集</span><Switch checked={values.rate_sync_enabled} onChange={(checked) => update("rate_sync_enabled", checked)} label="启用倍率采集" /></div>
           <div className="form-grid two">
             <Field label="同步间隔" hint="30 秒至 7 天"><NumberInput value={values.rate_sync_interval_seconds} min={30} max={604800} onChange={(value) => update("rate_sync_interval_seconds", value)} /></Field>
             <Field label="倍率源配置" hint="不会批量覆盖账号专属信息">
               <div className="source-summary"><Gauge size={16} /><span>地址、凭据、分组及换算倍率保持不变</span></div>
             </Field>
-          </div>
-        </BulkAutomationSection>
-
-        <BulkAutomationSection
-          icon={<ArrowDownUp size={17} />}
-          title="全局优先级排序"
-          meta={applied.priority ? (values.priority_enabled ? "将启用" : "将停用") : priorityMixed ? "当前值不一致" : "当前值一致"}
-          applied={applied.priority}
-          onApply={(checked) => setSection("priority", checked)}
-        >
-          <div className="setting-inline"><span>启用全局优先级排序</span><Switch checked={values.priority_enabled} onChange={(checked) => update("priority_enabled", checked)} label="启用全局优先级排序" /></div>
-          <div className="source-summary"><SlidersHorizontal size={16} /><span>按站点规则排序：低倍率优先，可叠加近期缓存率权重</span></div>
-        </BulkAutomationSection>
-
-        <BulkAutomationSection
-          icon={<ShieldCheck size={17} />}
-          title="分组倍率保护"
-          meta={applied.guard ? (values.guard_enabled ? `目标优先级 ${values.guard_priority}` : "将停用") : guardMixed ? "当前值不一致" : "当前值一致"}
-          applied={applied.guard}
-          onApply={(checked) => setSection("guard", checked)}
-        >
-          <div className="setting-inline"><span>启用分组倍率保护</span><Switch checked={values.guard_enabled} onChange={(checked) => update("guard_enabled", checked)} label="启用分组倍率保护" /></div>
-          <div className="form-grid two">
-            <Field label="触发条件">
-              <div className="segmented" role="group" aria-label="分组倍率保护触发条件">
-                <button type="button" className={values.guard_operator === "gt" ? "active" : ""} onClick={() => update("guard_operator", "gt")}>账号倍率 &gt; 分组倍率</button>
-                <button type="button" className={values.guard_operator === "gte" ? "active" : ""} onClick={() => update("guard_operator", "gte")}>账号倍率 ≥ 分组倍率</button>
-              </div>
-            </Field>
-            <Field label="保护优先级" hint="0 至 1000000"><NumberInput value={values.guard_priority} min={0} max={1_000_000} onChange={(value) => update("guard_priority", value)} /></Field>
           </div>
         </BulkAutomationSection>
       </form>
@@ -846,7 +807,7 @@ function failureReasonLabel(reason: FailureReason): string {
 }
 
 function toggleLabel(key: ToggleKey): string {
-  return { health_enabled: "账号测活", rate_sync_enabled: "倍率同步", priority_enabled: "全局排序", guard_enabled: "分组保护" }[key];
+  return { health_enabled: "账号测活", rate_sync_enabled: "倍率采集", priority_enabled: "全局排序", guard_enabled: "分组保护" }[key];
 }
 
 interface AccountSettingsModalProps {
@@ -906,11 +867,11 @@ function AccountSettingsModal({ account, onClose, onSaved }: AccountSettingsModa
     if (!account || !values) return;
     if (values.rate_sync_enabled && values.source_type === "newapi") {
       if (!values.source_base_url || !values.source_group) {
-        toast("开启 NewAPI 倍率同步前，请填写源站地址并拉取、绑定分组", "error");
+        toast("开启 NewAPI 倍率采集前，请填写源站地址并拉取、绑定分组", "error");
         return;
       }
       if ((!account.source_credential_set && !credential.trim()) || clearCredential) {
-        toast("开启 NewAPI 倍率同步前，请填写并保留源站凭据", "error");
+        toast("开启 NewAPI 倍率采集前，请填写并保留源站凭据", "error");
         return;
       }
     }
@@ -990,8 +951,6 @@ function AccountSettingsModal({ account, onClose, onSaved }: AccountSettingsModa
             <div className="form-grid four">
               <Field label="探测间隔" hint="10 至 86400 秒"><NumberInput value={values.probe_interval_seconds} min={10} max={86400} onChange={(value) => update("probe_interval_seconds", value)} /></Field>
               <Field label="超时时间" hint="3 至 600 秒"><NumberInput value={values.probe_timeout_seconds} min={3} max={600} onChange={(value) => update("probe_timeout_seconds", value)} /></Field>
-              <Field label="失败阈值" hint="达到后暂停调度"><NumberInput value={values.failure_threshold} min={1} max={100} onChange={(value) => update("failure_threshold", value)} /></Field>
-              <Field label="恢复成功阈值" hint="连续正常后恢复调度"><NumberInput value={values.recovery_success_threshold} min={1} max={100} onChange={(value) => update("recovery_success_threshold", value)} /></Field>
               <Field className="probe-model-field" label="探测模型" hint="OpenAI 默认 gpt-5.5；留空使用上游默认">
                 <Combobox
                   value={values.probe_model ?? ""}
@@ -1007,7 +966,7 @@ function AccountSettingsModal({ account, onClose, onSaved }: AccountSettingsModa
 
           <AutomationSection
             icon={<RefreshCw size={17} />}
-            title="倍率同步"
+            title="倍率采集"
             meta={values.rate_sync_enabled ? `每 ${values.rate_sync_interval_seconds} 秒` : "已停用"}
             checked={values.rate_sync_enabled}
             onChange={(checked) => update("rate_sync_enabled", checked)}
@@ -1066,34 +1025,6 @@ function AccountSettingsModal({ account, onClose, onSaved }: AccountSettingsModa
             ) : (
               <div className="source-summary"><Gauge size={16} /><span>通过本站 Sub2API 的账号账单探测接口解析实际倍率</span></div>
             )}
-          </AutomationSection>
-
-          <AutomationSection
-            icon={<ArrowDownUp size={17} />}
-            title="全局优先级排序"
-            meta={values.priority_enabled ? `当前优先级 ${account.priority}` : "保持固定优先级"}
-            checked={values.priority_enabled}
-            onChange={(checked) => update("priority_enabled", checked)}
-          >
-            <div className="source-summary"><SlidersHorizontal size={16} /><span>按站点规则写回优先级：低倍率优先，可叠加近期缓存率权重</span></div>
-          </AutomationSection>
-
-          <AutomationSection
-            icon={<ShieldCheck size={17} />}
-            title="分组倍率保护"
-            meta={account.guard_holding ? "保护生效中" : values.guard_enabled ? `目标优先级 ${values.guard_priority}` : "已停用"}
-            checked={values.guard_enabled}
-            onChange={(checked) => update("guard_enabled", checked)}
-          >
-            <div className="form-grid two">
-              <Field label="触发条件">
-                <div className="segmented" role="group" aria-label="分组倍率保护触发条件">
-                  <button type="button" className={values.guard_operator === "gt" ? "active" : ""} onClick={() => update("guard_operator", "gt")}>账号倍率 &gt; 分组倍率</button>
-                  <button type="button" className={values.guard_operator === "gte" ? "active" : ""} onClick={() => update("guard_operator", "gte")}>账号倍率 ≥ 分组倍率</button>
-                </div>
-              </Field>
-              <Field label="保护优先级" hint="0 至 1000000"><NumberInput value={values.guard_priority} min={0} max={1_000_000} onChange={(value) => update("guard_priority", value)} /></Field>
-            </div>
           </AutomationSection>
         </form>
       ) : null}

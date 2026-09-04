@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/langrenjh-alt/S2AM-GO/internal/upstream"
+	"sub2api-upstream-manager/internal/upstream"
 )
 
 func (a *App) syncSite(ctx context.Context, siteID, ownerFilter, actorID, mode string) error {
@@ -140,7 +140,7 @@ func (a *App) syncSite(ctx context.Context, siteID, ownerFilter, actorID, mode s
 		return err
 	}
 	_ = a.audit(ctx, site.OwnerID, actorID, siteID, "", "inventory.sync", "success", map[string]any{"accounts": len(accounts), "groups": len(groups), "mode": mode})
-	a.applyEnabledGroupRulesForSite(ctx, siteID)
+
 	a.requestBalanceRefresh()
 	return nil
 }
