@@ -4,7 +4,7 @@
 
 Upstream Pilot 是 Tendo33 维护的 Sub2API 上游运营控制台。它同步账号与分组，采集探测、真实请求、余额和采购倍率，生成可解释的调度建议，并在明确启用后调整优先级与容量。
 
-[English](README.en.md) · [使用手册](docs/OPERATIONS.md) · [部署](docs/DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [整仓审查](docs/REVIEW.md)
+[English](README.en.md) · [使用手册](docs/OPERATIONS.md) · [部署](docs/DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [整仓审查](docs/REVIEW.md) · [辅助能力改进路线](docs/SUB2API_COMPANION_REVIEW.md)
 
 > 当前为预览版本，默认只观察。已知问题与验证边界以整仓审查为准，不能将本地模拟器通过等同于生产 SLA。
 
