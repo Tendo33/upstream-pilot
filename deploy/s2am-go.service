@@ -1,0 +1,46 @@
+[Unit]
+Description=S2AM-GO Sub2API account scheduler
+Documentation=https://github.com/langrenjh-alt/S2AM-GO
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=s2am
+Group=s2am
+WorkingDirectory=/opt/s2am-go
+Environment=S2AM_LOG_DIR=/var/lib/s2am-go/logs
+EnvironmentFile=/etc/s2am-go/s2am-go.env
+ExecStart=/opt/s2am-go/s2am-go
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+StateDirectory=s2am-go
+StateDirectoryMode=0700
+
+# ProtectSystem remains strict; StateDirectory is the only writable application
+# path and contains the daily audit JSONL files.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
