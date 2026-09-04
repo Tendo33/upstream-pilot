@@ -8,6 +8,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:17
@@ -32,7 +33,9 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm --prefix web ci
+      - name: Install frontend dependencies
+        timeout-minutes: 4
+        run: npm --prefix web ci --prefer-offline --fetch-timeout=20000 --fetch-retries=1
       - run: npm --prefix web run build
       - run: go test -race -count=1 ./...
       - run: go vet ./...
