@@ -10,11 +10,14 @@ import (
 	"time"
 
 	"github.com/Tendo33/upstream-pilot/internal/quality"
+	"github.com/Tendo33/upstream-pilot/internal/upstream"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type engineWork struct {
+	Native          upstream.NativeAssessment
+	RemoteGroups    []int64
 	Work            AccountWork
 	Policy          quality.Policy
 	Old             quality.State
@@ -85,7 +88,7 @@ func (a *App) runEngine(ctx context.Context, site, owner, actor string) (Reconci
 			if !p.Snapshot.RateFresh {
 				price = nil
 			}
-			candidates = append(candidates, quality.Candidate{ID: p.Work.ID, Pools: p.Pools, Baseline: s.Baseline, Current: p.Work.Priority, Desired: s.Desired, Tier: s.Tier, Healthy: p.Decision.Eligible, Mutable: p.Policy.Mode == "priority" && !s.Conflict && s.Status != "unknown", Available: p.PreflightError == nil && p.Work.RemoteStatus == "active" && (p.Work.Schedulable || s.OwnedPause), Price: price, Latency: p.Decision.SortingLatency})
+			candidates = append(candidates, quality.Candidate{ID: p.Work.ID, Pools: p.Pools, Baseline: s.Baseline, Current: p.Work.Priority, Desired: s.Desired, Tier: s.Tier, Healthy: p.Decision.Eligible, Mutable: p.Policy.Mode == "priority" && !s.Conflict && s.Status != "unknown", Available: p.PreflightError == nil && p.Work.RemoteStatus == "active" && (p.Native.State == "eligible" || s.OwnedPause), Price: price, Latency: p.Decision.SortingLatency})
 		}
 		plan := quality.Plan(candidates, policies)
 		previewCandidates := append([]quality.Candidate(nil), candidates...)
@@ -201,18 +204,21 @@ func (a *App) engineSnapshot(ctx context.Context, site string) ([]engineWork, ma
 		return nil, nil, err
 	}
 	memberships := map[string][]string{}
-	rows, err = a.db.Query(ctx, `SELECT m.account_id::text,m.group_id::text,COALESCE(a.probe_model,''),COALESCE(p.config,'{}'::jsonb) FROM account_group_memberships m JOIN upstream_accounts a ON a.id=m.account_id JOIN upstream_groups g ON g.id=m.group_id LEFT JOIN engine_group_policies p ON p.group_id=g.id AND p.model=COALESCE(a.probe_model,'') WHERE a.site_id=$1 AND a.deleted_at IS NULL AND g.deleted_at IS NULL`, site)
+	remoteGroups := map[string][]int64{}
+	rows, err = a.db.Query(ctx, `SELECT m.account_id::text,m.group_id::text,g.remote_id,COALESCE(a.probe_model,''),COALESCE(p.config,'{}'::jsonb) FROM account_group_memberships m JOIN upstream_accounts a ON a.id=m.account_id JOIN upstream_groups g ON g.id=m.group_id LEFT JOIN engine_group_policies p ON p.group_id=g.id AND p.model=COALESCE(a.probe_model,'') WHERE a.site_id=$1 AND a.deleted_at IS NULL AND g.deleted_at IS NULL`, site)
 	if err != nil {
 		return nil, nil, err
 	}
 	for rows.Next() {
 		var id, group, model string
+		var remoteGroup int64
 		var raw []byte
-		if err = rows.Scan(&id, &group, &model, &raw); err != nil {
+		if err = rows.Scan(&id, &group, &remoteGroup, &model, &raw); err != nil {
 			break
 		}
 		key := poolKey(group, model)
 		memberships[id] = append(memberships[id], key)
+		remoteGroups[id] = append(remoteGroups[id], remoteGroup)
 		p := quality.DefaultGroupPolicy()
 		if err = json.Unmarshal(raw, &p); err != nil {
 			break
@@ -246,6 +252,8 @@ func (a *App) engineSnapshot(ctx context.Context, site string) ([]engineWork, ma
 		facts := decisionFacts(p, p.Decision, *p.Decision.State.EvaluatedAt)
 		p.PlannedFacts = &facts
 		p.Pools = memberships[id]
+		p.RemoteGroups = remoteGroups[id]
+		p.Native = assessWorkNative(p.Work, p.RemoteGroups, time.Now().UTC())
 		works = append(works, p)
 	}
 	return works, policies, nil
@@ -258,7 +266,7 @@ func safeToPause(target engineWork, works []engineWork, policies map[string]qual
 	for _, pool := range target.Pools {
 		healthy := 0
 		for _, p := range works {
-			if p.Work.ID == target.Work.ID || !p.Work.Schedulable || p.Work.RemoteStatus != "active" || !p.Decision.Eligible || p.Decision.State.Conflict || p.Decision.State.PlanError != "" {
+			if p.Work.ID == target.Work.ID || p.Native.State != "eligible" || !p.Work.Schedulable || p.Work.RemoteStatus != "active" || !p.Decision.Eligible || p.Decision.State.Conflict || p.Decision.State.PlanError != "" {
 				continue
 			}
 			for _, other := range p.Pools {
@@ -305,6 +313,10 @@ func (a *App) preflightEngine(ctx context.Context, works []engineWork) {
 					p.Work.Priority = remote.Priority
 					p.Work.Schedulable = remote.Schedulable
 					p.Work.RemoteStatus = statusText(remote.Status)
+					p.Work.NativeConstraints = remote.Native
+					checked := time.Now().UTC()
+					p.Work.NativeCheckedAt = &checked
+					p.Native = assessWorkNative(p.Work, p.RemoteGroups, checked)
 					if p.Policy.Mode == "priority" {
 						expected := p.Old.Baseline
 						if p.Old.LastApplied != nil {
@@ -329,4 +341,15 @@ func (a *App) preflightEngine(ctx context.Context, works []engineWork) {
 		}(&works[i])
 	}
 	wait.Wait()
+}
+
+func assessWorkNative(w AccountWork, groups []int64, now time.Time) upstream.NativeAssessment {
+	if w.NativeCheckedAt == nil || now.Sub(*w.NativeCheckedAt) > 5*time.Minute {
+		return upstream.NativeAssessment{State: "unknown", Reason: "原生资格快照未采集或已过期"}
+	}
+	model := ""
+	if w.ProbeModel != nil {
+		model = *w.ProbeModel
+	}
+	return (upstream.Sub2Account{Native: w.NativeConstraints, Platform: w.Platform, Type: w.AccountType, Status: w.RemoteStatus, Schedulable: w.Schedulable}).NativeEligibility(model, groups, now)
 }

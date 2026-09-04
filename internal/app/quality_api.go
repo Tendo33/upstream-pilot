@@ -14,26 +14,29 @@ import (
 )
 
 type qualityAccountView struct {
-	HasManagedControls bool                     `json:"has_managed_controls"`
-	HasPendingControls bool                     `json:"has_pending_controls"`
-	SortingLatency     *int                     `json:"sorting_latency_ms"`
-	LatencySource      string                   `json:"latency_source"`
-	Eligible           bool                     `json:"eligible"`
-	ReferenceRate      *float64                 `json:"reference_rate"`
-	Account            Account                  `json:"account"`
-	Policy             quality.Policy           `json:"policy"`
-	State              quality.State            `json:"state"`
-	P95                *int                     `json:"first_content_p95_ms"`
-	Samples            int                      `json:"sample_count"`
-	SuccessPercent     *float64                 `json:"success_percent"`
-	Balance            *float64                 `json:"balance"`
-	BalanceUnit        string                   `json:"balance_unit"`
-	BalanceAt          *time.Time               `json:"balance_at"`
-	BalanceFresh       bool                     `json:"balance_fresh"`
-	Rate               *float64                 `json:"cost_rate"`
-	RateFresh          bool                     `json:"cost_fresh"`
-	Traffic            *upstream.TrafficSummary `json:"traffic"`
-	TrafficAt          *time.Time               `json:"traffic_at"`
+	ControllerError    string                    `json:"controller_error"`
+	PendingSince       *time.Time                `json:"pending_since"`
+	Native             upstream.NativeAssessment `json:"native"`
+	HasManagedControls bool                      `json:"has_managed_controls"`
+	HasPendingControls bool                      `json:"has_pending_controls"`
+	SortingLatency     *int                      `json:"sorting_latency_ms"`
+	LatencySource      string                    `json:"latency_source"`
+	Eligible           bool                      `json:"eligible"`
+	ReferenceRate      *float64                  `json:"reference_rate"`
+	Account            Account                   `json:"account"`
+	Policy             quality.Policy            `json:"policy"`
+	State              quality.State             `json:"state"`
+	P95                *int                      `json:"first_content_p95_ms"`
+	Samples            int                       `json:"sample_count"`
+	SuccessPercent     *float64                  `json:"success_percent"`
+	Balance            *float64                  `json:"balance"`
+	BalanceUnit        string                    `json:"balance_unit"`
+	BalanceAt          *time.Time                `json:"balance_at"`
+	BalanceFresh       bool                      `json:"balance_fresh"`
+	Rate               *float64                  `json:"cost_rate"`
+	RateFresh          bool                      `json:"cost_fresh"`
+	Traffic            *upstream.TrafficSummary  `json:"traffic"`
+	TrafficAt          *time.Time                `json:"traffic_at"`
 }
 
 func (a *App) qualityListHandler(w http.ResponseWriter, r *http.Request) error {
@@ -109,6 +112,10 @@ func (a *App) qualityView(ctx context.Context, id, owner string) (qualityAccount
 	if err = a.db.QueryRow(ctx, `SELECT COALESCE((SELECT last_applied_priority IS NOT NULL OR owned_pause OR applied_control<>'{}'::jsonb FROM quality_states WHERE account_id=$1),false),COALESCE((SELECT pending_priority IS NOT NULL OR COALESCE(pending_control->'to','{}'::jsonb)<>'{}'::jsonb FROM quality_states WHERE account_id=$1),false)`, id).Scan(&v.HasManagedControls, &v.HasPendingControls); err != nil {
 		return v, err
 	}
+	err = a.db.QueryRow(ctx, `SELECT controller_error,pending_since FROM quality_states WHERE account_id=$1`, id).Scan(&v.ControllerError, &v.PendingSince)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return v, err
+	}
 	snapshot, err := a.qualitySnapshot(ctx, work, v.Policy)
 	if err != nil {
 		return v, err
@@ -119,7 +126,8 @@ func (a *App) qualityView(ctx context.Context, id, owner string) (qualityAccount
 	v.LatencySource = decision.LatencySource
 	v.Samples = decision.Count
 	v.SuccessPercent = decision.SuccessPercent
-	v.Eligible = decision.Eligible && !v.State.Conflict && v.State.PlanError == "" && work.RemoteStatus == "active" && work.Schedulable
+	v.Native = assessWorkNative(work, nil, time.Now().UTC())
+	v.Eligible = v.Native.State == "eligible" && decision.Eligible && !v.State.Conflict && v.State.PlanError == "" && work.RemoteStatus == "active" && work.Schedulable
 	// Current evidence is shown separately from the last committed decision time.
 	evaluated := v.State.EvaluatedAt
 	desired := v.State.Desired
@@ -136,7 +144,7 @@ func (a *App) qualityView(ctx context.Context, id, owner string) (qualityAccount
 		return v, err
 	}
 	var raw []byte
-	err = a.db.QueryRow(ctx, `SELECT snapshot,checked_at FROM quality_traffic WHERE account_id=$1`, id).Scan(&raw, &v.TrafficAt)
+	err = a.db.QueryRow(ctx, `SELECT snapshot,checked_at FROM quality_traffic WHERE account_id=$1 AND source_generation=$2`, id, work.SourceGeneration).Scan(&raw, &v.TrafficAt)
 	if err == nil {
 		var t upstream.TrafficSummary
 		if err = json.Unmarshal(raw, &t); err != nil {
@@ -333,8 +341,8 @@ func (a *App) qualityHistoryHandler(w http.ResponseWriter, r *http.Request) erro
 	}
 	result := map[string]json.RawMessage{}
 	queries := map[string]string{
-		"probes":    `SELECT COALESCE(jsonb_agg(v),'[]') FROM(SELECT created_at,success,first_content_ms,duration_ms,model,actual_model,stream_complete,failure_reason,http_status,message FROM probe_attempts WHERE account_id=$1 ORDER BY created_at DESC LIMIT 100)v`,
-		"prices":    `SELECT COALESCE(jsonb_agg(v),'[]') FROM(SELECT source_rate,effective_rate,checked_at FROM upstream_price_history WHERE account_id=$1 ORDER BY checked_at DESC LIMIT 100)v`,
+		"probes":    `SELECT COALESCE(jsonb_agg(v),'[]') FROM(SELECT source_generation,created_at,success,first_content_ms,duration_ms,model,actual_model,stream_complete,failure_reason,http_status,message FROM probe_attempts WHERE account_id=$1 ORDER BY created_at DESC LIMIT 100)v`,
+		"prices":    `SELECT COALESCE(jsonb_agg(v),'[]') FROM(SELECT source_generation,source_rate,effective_rate,checked_at FROM upstream_price_history WHERE account_id=$1 ORDER BY checked_at DESC LIMIT 100)v`,
 		"decisions": `SELECT COALESCE(jsonb_agg(v),'[]') FROM(SELECT mode,status,reason,before_priority,desired_priority,applied,error,created_at FROM quality_decisions WHERE account_id=$1 ORDER BY created_at DESC LIMIT 100)v`,
 	}
 	for name, query := range queries {
@@ -350,7 +358,7 @@ func (a *App) qualityHistoryHandler(w http.ResponseWriter, r *http.Request) erro
 
 func (a *App) sampleQualityTraffic(ctx context.Context, w AccountWork) error {
 	var recent bool
-	if err := a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM quality_traffic WHERE account_id=$1 AND checked_at>now()-interval '60 seconds')`, w.ID).Scan(&recent); err != nil {
+	if err := a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM quality_traffic WHERE account_id=$1 AND source_generation=$2 AND checked_at>now()-interval '60 seconds')`, w.ID, w.SourceGeneration).Scan(&recent); err != nil {
 		return err
 	}
 	if recent {
@@ -375,14 +383,29 @@ func (a *App) sampleQualityTraffic(ctx context.Context, w AccountWork) error {
 	if err != nil {
 		return err
 	}
-	_, err = a.db.Exec(ctx, `INSERT INTO quality_traffic(account_id,snapshot) VALUES($1,$2) ON CONFLICT(account_id) DO UPDATE SET snapshot=excluded.snapshot,checked_at=now()`, w.ID, raw)
-	return err
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx, `INSERT INTO quality_traffic(account_id,snapshot,source_generation) SELECT id,$2,source_generation FROM upstream_accounts WHERE id=$1 AND source_generation=$3 AND deleted_at IS NULL FOR SHARE ON CONFLICT(account_id) DO UPDATE SET snapshot=excluded.snapshot,source_generation=excluded.source_generation,checked_at=now()`, w.ID, raw, w.SourceGeneration)
+	if err != nil {
+		return err
+	}
+	message := ""
+	if snapshot.Status != "ok" {
+		message = snapshot.Message
+	}
+	if err = recordIncidentTx(ctx, tx, w, "collector_traffic", message); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (a *App) qualityGroupHandler(w http.ResponseWriter, r *http.Request) error {
 	var raw []byte
 	err := a.db.QueryRow(r.Context(), `WITH members AS (
- SELECT g.id,g.name,g.site_id,a.id AS account_id,COALESCE(a.probe_model,'') AS model,a.schedulable,
+ SELECT g.id,g.name,g.site_id,a.id AS account_id,COALESCE(a.probe_model,'') AS model,a.schedulable,a.source_generation,
  q.status,q.last_sample_at,COALESCE((policy.config->>'fresh_seconds')::integer,600) AS fresh_seconds
  FROM upstream_groups g JOIN sites s ON s.id=g.site_id
  LEFT JOIN account_group_memberships m ON m.group_id=g.id
@@ -394,8 +417,8 @@ func (a *App) qualityGroupHandler(w http.ResponseWriter, r *http.Request) error 
  count(*) FILTER(WHERE m.schedulable) AS schedulable,
  count(*) FILTER(WHERE m.schedulable AND m.status='healthy' AND m.last_sample_at>now()-m.fresh_seconds*interval '1 second') AS healthy,
  count(*) FILTER(WHERE m.status='degraded') AS degraded,
- (SELECT round(100.0*count(*) FILTER(WHERE p.success)/NULLIF(count(*),0),1) FROM probe_attempts p JOIN members other ON other.account_id=p.account_id WHERE other.id=m.id AND other.model=m.model AND COALESCE(p.model,'')=m.model AND NOT p.control_error AND p.created_at>now()-other.fresh_seconds*interval '1 second') AS success_percent,
- (SELECT percentile_disc(0.95) WITHIN GROUP(ORDER BY p.first_content_ms) FROM probe_attempts p JOIN members other ON other.account_id=p.account_id WHERE other.id=m.id AND other.model=m.model AND COALESCE(p.model,'')=m.model AND p.success AND NOT p.control_error AND p.first_content_ms IS NOT NULL AND p.created_at>now()-other.fresh_seconds*interval '1 second') AS first_content_p95_ms
+ (SELECT round(100.0*count(*) FILTER(WHERE p.success)/NULLIF(count(*),0),1) FROM probe_attempts p JOIN members other ON other.account_id=p.account_id AND other.source_generation=p.source_generation WHERE other.id=m.id AND other.model=m.model AND COALESCE(p.model,'')=m.model AND NOT p.control_error AND p.created_at>now()-other.fresh_seconds*interval '1 second') AS success_percent,
+ (SELECT percentile_disc(0.95) WITHIN GROUP(ORDER BY p.first_content_ms) FROM probe_attempts p JOIN members other ON other.account_id=p.account_id AND other.source_generation=p.source_generation WHERE other.id=m.id AND other.model=m.model AND COALESCE(p.model,'')=m.model AND p.success AND NOT p.control_error AND p.first_content_ms IS NOT NULL AND p.created_at>now()-other.fresh_seconds*interval '1 second') AS first_content_p95_ms
  FROM members m GROUP BY m.id,m.name,m.site_id,m.model ORDER BY m.name,m.model
  )v`, identityFrom(r).ID).Scan(&raw)
 	if err != nil {

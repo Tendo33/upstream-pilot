@@ -143,7 +143,7 @@ func dueAccountBalanceRefreshGroups(works []accountBalanceWork, snapshots map[st
 		}
 		group.Works = append(group.Works, work)
 		snapshot, ok := snapshots[work.ID]
-		if !ok || snapshot.CacheKey != key || now.Sub(snapshot.CheckedAt) >= balanceSnapshotMaxAge {
+		if !ok || snapshot.SourceGeneration != work.SourceGeneration || snapshot.CacheKey != key || now.Sub(snapshot.CheckedAt) >= balanceSnapshotMaxAge {
 			group.Due = true
 		}
 	}
@@ -216,7 +216,7 @@ func canonicalBalanceSourceURL(rawURL, sourceType string) string {
 
 func (a *App) loadAllAccountBalanceWork(ctx context.Context) ([]accountBalanceWork, error) {
 	rows, err := a.db.Query(ctx, `
-		SELECT a.id::text,s.owner_id::text,a.site_id::text,s.name,s.base_url,s.api_key_ciphertext,a.remote_id,a.source_type,a.source_base_url,a.observed_source_base_url,COALESCE(a.observed_source_credential_fingerprint,''),a.source_credential_ciphertext,a.source_user_id
+		SELECT a.id::text,s.owner_id::text,a.site_id::text,s.name,s.base_url,s.api_key_ciphertext,a.remote_id,a.source_type,a.source_base_url,a.observed_source_base_url,COALESCE(a.observed_source_credential_fingerprint,''),a.source_credential_ciphertext,a.source_user_id,a.source_generation
 		FROM upstream_accounts a JOIN sites s ON s.id=a.site_id
 		WHERE a.deleted_at IS NULL
 		ORDER BY s.owner_id,a.site_id,a.id`)
@@ -230,7 +230,7 @@ func (a *App) loadAllAccountBalanceWork(ctx context.Context) ([]accountBalanceWo
 		var sourceCredential *string
 		if err := rows.Scan(
 			&work.ID, &work.OwnerID, &work.SiteID, &work.SiteName, &work.SiteBaseURL, &work.SiteAPIKeyCiphertext, &work.RemoteID,
-			&work.SourceType, &work.SourceBaseURL, &work.ObservedSourceBaseURL, &work.ObservedSourceCredentialFingerprint, &sourceCredential, &work.SourceUserID,
+			&work.SourceType, &work.SourceBaseURL, &work.ObservedSourceBaseURL, &work.ObservedSourceCredentialFingerprint, &sourceCredential, &work.SourceUserID, &work.SourceGeneration,
 		); err != nil {
 			return nil, err
 		}
@@ -248,7 +248,7 @@ func (a *App) loadAccountBalanceSnapshots(ctx context.Context, accountIDs []stri
 		return map[string]accountBalanceSnapshot{}, nil
 	}
 	rows, err := a.db.Query(ctx, `
-		SELECT account_id::text,cache_key,status,provider,plan_name,remaining,used,total,unit,message,endpoint,checked_at
+		SELECT account_id::text,cache_key,status,provider,plan_name,remaining,used,total,unit,message,endpoint,checked_at,source_generation
 		FROM account_balance_snapshots
 		WHERE account_id=ANY(string_to_array($1, ',')::uuid[])`, strings.Join(accountIDs, ","))
 	if err != nil {
@@ -259,7 +259,7 @@ func (a *App) loadAccountBalanceSnapshots(ctx context.Context, accountIDs []stri
 
 func (a *App) loadAllAccountBalanceSnapshots(ctx context.Context) (map[string]accountBalanceSnapshot, error) {
 	rows, err := a.db.Query(ctx, `
-		SELECT b.account_id::text,b.cache_key,b.status,b.provider,b.plan_name,b.remaining,b.used,b.total,b.unit,b.message,b.endpoint,b.checked_at
+		SELECT b.account_id::text,b.cache_key,b.status,b.provider,b.plan_name,b.remaining,b.used,b.total,b.unit,b.message,b.endpoint,b.checked_at,b.source_generation
 		FROM account_balance_snapshots b
 		JOIN upstream_accounts a ON a.id=b.account_id
 		WHERE a.deleted_at IS NULL`)
@@ -277,7 +277,7 @@ func scanAccountBalanceSnapshots(rows pgx.Rows) (map[string]accountBalanceSnapsh
 		var snapshot accountBalanceSnapshot
 		if err := rows.Scan(
 			&accountID, &snapshot.CacheKey, &snapshot.Status, &snapshot.Provider, &snapshot.PlanName,
-			&snapshot.Remaining, &snapshot.Used, &snapshot.Total, &snapshot.Unit, &snapshot.Message, &snapshot.Endpoint, &snapshot.CheckedAt,
+			&snapshot.Remaining, &snapshot.Used, &snapshot.Total, &snapshot.Unit, &snapshot.Message, &snapshot.Endpoint, &snapshot.CheckedAt, &snapshot.SourceGeneration,
 		); err != nil {
 			return nil, err
 		}
@@ -299,17 +299,35 @@ func (a *App) saveAccountBalanceSnapshots(ctx context.Context, cacheKey string, 
 	}
 	defer tx.Rollback(ctx)
 	for _, work := range works {
+		var generation int64
+		if err := tx.QueryRow(ctx, `SELECT source_generation FROM upstream_accounts WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, work.ID).Scan(&generation); err != nil {
+			return err
+		}
+		if generation != work.SourceGeneration {
+			continue
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO account_balance_snapshots(account_id,cache_key,status,provider,plan_name,remaining,used,total,unit,message,endpoint,checked_at)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+			INSERT INTO account_balance_snapshots(account_id,cache_key,status,provider,plan_name,remaining,used,total,unit,message,endpoint,checked_at,source_generation)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 			ON CONFLICT(account_id) DO UPDATE SET
 			 cache_key=excluded.cache_key,status=excluded.status,provider=excluded.provider,plan_name=excluded.plan_name,
 			 remaining=excluded.remaining,used=excluded.used,total=excluded.total,unit=excluded.unit,
-			 message=excluded.message,endpoint=excluded.endpoint,checked_at=excluded.checked_at,updated_at=now()`,
+			 message=excluded.message,endpoint=excluded.endpoint,checked_at=excluded.checked_at,source_generation=excluded.source_generation,updated_at=now() WHERE account_balance_snapshots.checked_at<=excluded.checked_at`,
 			work.ID, cacheKey, balance.Status, balance.Provider, balance.PlanName, balance.Remaining, balance.Used, balance.Total,
-			balance.Unit, balance.Message, balance.Endpoint, checkedAt,
+			balance.Unit, balance.Message, balance.Endpoint, checkedAt, work.SourceGeneration,
 		); err != nil {
 			return fmt.Errorf("save balance snapshot for account %s: %w", work.ID, err)
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO balance_observations(account_id,source_generation,status,remaining,used,total,unit,checked_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, work.ID, work.SourceGeneration, balance.Status, balance.Remaining, balance.Used, balance.Total, balance.Unit, checkedAt); err != nil {
+			return err
+		}
+		message := ""
+		if balance.Status != "ok" {
+			message = "余额采集不可用：" + balance.Message
+		}
+		incidentWork := AccountWork{Account: Account{ID: work.ID, SiteID: work.SiteID, Name: fmt.Sprintf("账号 #%d", work.RemoteID)}, OwnerID: work.OwnerID, SourceGeneration: work.SourceGeneration}
+		if err = recordIncidentTx(ctx, tx, incidentWork, "collector_balance", message); err != nil {
+			return err
 		}
 	}
 	return tx.Commit(ctx)

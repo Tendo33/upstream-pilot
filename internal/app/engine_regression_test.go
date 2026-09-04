@@ -80,7 +80,7 @@ func TestEngineExpiredFinancialBackupCannotAuthorizePause(t *testing.T) {
 	q.FreshSeconds = 30
 	q.LowBalance = &limit
 	setTestQualityPolicy(t, a, other, q)
-	engineRegressionSQL(t, a, `INSERT INTO account_balance_snapshots(account_id,cache_key,status,remaining,checked_at) VALUES($1,'review','ok',0,now()),($2,'review','ok',50,now()-interval '29 seconds')`, w.ID, other)
+	engineRegressionSQL(t, a, `INSERT INTO account_balance_snapshots(account_id,cache_key,status,remaining,checked_at) VALUES($1,$3,'ok',0,now()),($2,$4,'ok',50,now()-interval '29 seconds')`, w.ID, other, qualityTestBalanceKey(t, a, w.ID), qualityTestBalanceKey(t, a, other))
 	works, policies, err := a.engineSnapshot(ctx, w.SiteID)
 	if err != nil {
 		t.Fatal(err)
@@ -373,7 +373,7 @@ func TestEngineTargetEvidenceCannotExpireDuringBackupReadback(t *testing.T) {
 	limit := 10.0
 	p.LowBalance = &limit
 	setTestQualityPolicy(t, a, w.ID, p)
-	engineRegressionSQL(t, a, `INSERT INTO account_balance_snapshots(account_id,cache_key,status,remaining,checked_at) VALUES($1,'target-expiry','ok',0,now()-interval '29 seconds')`, w.ID)
+	engineRegressionSQL(t, a, `INSERT INTO account_balance_snapshots(account_id,cache_key,status,remaining,checked_at) VALUES($1,$2,'ok',0,now()-interval '29 seconds')`, w.ID, qualityTestBalanceKey(t, a, w.ID))
 	works, policies, err := a.engineSnapshot(ctx, w.SiteID)
 	if err != nil {
 		t.Fatal(err)

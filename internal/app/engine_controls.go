@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -13,6 +14,8 @@ import (
 )
 
 type controlIntent struct {
+	ControlScope     string         `json:"control_scope,omitempty"`
+	SourceGeneration int64          `json:"source_generation"`
 	PlanID           string         `json:"plan_id,omitempty"`
 	ConfigGeneration int64          `json:"config_generation,omitempty"`
 	From             map[string]any `json:"from"`
@@ -55,7 +58,7 @@ func (a *App) applyEngineControls(ctx context.Context, p *engineWork, works []en
 		return before, false, nil
 	}
 	var generation int64
-	if err := a.db.QueryRow(ctx, `SELECT config_generation FROM upstream_accounts WHERE id=$1`, w.ID).Scan(&generation); err != nil {
+	if err := a.db.QueryRow(ctx, `SELECT config_generation FROM upstream_accounts WHERE id=$1 AND source_generation=$2`, w.ID, w.SourceGeneration).Scan(&generation); err != nil {
 		return before, false, err
 	}
 	if generation != w.ConfigGeneration {
@@ -76,7 +79,8 @@ func (a *App) applyEngineControls(ctx context.Context, p *engineWork, works []en
 	pending := controlIntent{}
 	var b, c, i []byte
 	var pendingPriority *int
-	if err = a.db.QueryRow(ctx, `SELECT baseline_control,applied_control,pending_control,pending_priority FROM quality_states WHERE account_id=$1`, w.ID).Scan(&b, &c, &i, &pendingPriority); err != nil {
+	var pendingSince *time.Time
+	if err = a.db.QueryRow(ctx, `SELECT baseline_control,applied_control,pending_control,pending_priority,pending_since FROM quality_states WHERE account_id=$1`, w.ID).Scan(&b, &c, &i, &pendingPriority, &pendingSince); err != nil {
 		return before, false, err
 	}
 	if err = json.Unmarshal(b, &baseline); err != nil {
@@ -107,6 +111,9 @@ func (a *App) applyEngineControls(ctx context.Context, p *engineWork, works []en
 		s.Status = "conflict"
 		s.Reason = fmt.Sprintf("上游 %s 已被人工或其他工具修改，停止自动覆盖", k)
 		return before, false, nil
+	}
+	if len(pending.To) > 0 && pending.ControlScope != "" && pending.ControlScope != controlScope(w) {
+		return conflict("控制目标站点已变化；旧意图无法在新站点确认")
 	}
 	for k, to := range pending.To {
 		if !controlEqual(current[k], to) && !controlEqual(current[k], pending.From[k]) {
@@ -182,7 +189,7 @@ func (a *App) applyEngineControls(ctx context.Context, p *engineWork, works []en
 			desired["schedulable"] = true
 		}
 	}
-	intent := controlIntent{PlanID: p.PlanID, ConfigGeneration: w.ConfigGeneration, From: map[string]any{}, To: map[string]any{}}
+	intent := controlIntent{ControlScope: controlScope(w), SourceGeneration: w.SourceGeneration, PlanID: p.PlanID, ConfigGeneration: w.ConfigGeneration, From: map[string]any{}, To: map[string]any{}}
 	for k, v := range desired {
 		if !controlEqual(current[k], v) {
 			intent.From[k] = current[k]
@@ -192,13 +199,16 @@ func (a *App) applyEngineControls(ctx context.Context, p *engineWork, works []en
 	if len(intent.To) == 0 {
 		return before, false, nil
 	}
+	if pending.SourceGeneration != w.SourceGeneration || !reflect.DeepEqual(pending.To, intent.To) {
+		pendingSince = nil
+	}
 	raw, _ := json.Marshal(intent)
 	baseRaw, _ := json.Marshal(baseline)
 	var priority any
 	if v, ok := intent.To["priority"]; ok {
 		priority = int(v.(float64))
 	}
-	if _, err = a.db.Exec(ctx, `UPDATE quality_states SET pending_control=$2,baseline_control=$3,pending_priority=$4 WHERE account_id=$1`, w.ID, raw, baseRaw, priority); err != nil {
+	if _, err = a.db.Exec(ctx, `UPDATE quality_states SET pending_control=$2,pending_since=COALESCE($5,now()),baseline_control=$3,pending_priority=$4 WHERE account_id=$1`, w.ID, raw, baseRaw, priority, pendingSince); err != nil {
 		return before, false, err
 	}
 	// Account reads and backup checks may take time. Recheck the whole dependent
@@ -288,6 +298,10 @@ func (a *App) verifyBackups(ctx context.Context, target engineWork, works []engi
 		}
 		p.Work.Schedulable = remote.Schedulable
 		p.Work.RemoteStatus = statusText(remote.Status)
+		p.Work.NativeConstraints = remote.Native
+		checkedAt := time.Now().UTC()
+		p.Work.NativeCheckedAt = &checkedAt
+		p.Native = assessWorkNative(p.Work, p.RemoteGroups, checkedAt)
 		p.Old.PlanError = p.Decision.State.PlanError
 		p.Snapshot, err = a.qualitySnapshot(ctx, p.Work, p.Policy)
 		if err != nil {
@@ -299,6 +313,7 @@ func (a *App) verifyBackups(ctx context.Context, target engineWork, works []engi
 	now := time.Now().UTC()
 	for i := range checked {
 		p := &checked[i]
+		p.Native = assessWorkNative(p.Work, p.RemoteGroups, now)
 		if p.Decision.Eligible {
 			p.Decision = quality.Evaluate(p.Policy, p.Old, p.Snapshot, now)
 		}
@@ -357,7 +372,7 @@ func (a *App) restoreEngineControls(ctx context.Context, w AccountWork, s qualit
 		return remote, nil
 	}
 	raw, _ := json.Marshal(restore)
-	if _, err := a.db.Exec(ctx, `UPDATE quality_states SET pending_control=$2,pending_priority=$3 WHERE account_id=$1`, w.ID, raw, s.Baseline); err != nil {
+	if _, err := a.db.Exec(ctx, `UPDATE quality_states SET pending_control=$2,pending_since=COALESCE(pending_since,now()),pending_priority=$3 WHERE account_id=$1`, w.ID, raw, s.Baseline); err != nil {
 		return remote, err
 	}
 	if _, err := client.UpdateCapacity(ctx, w.RemoteID, restore.To); err != nil {
@@ -374,4 +389,8 @@ func (a *App) restoreEngineControls(ctx context.Context, w AccountWork, s qualit
 		}
 	}
 	return updated, nil
+}
+
+func controlScope(w AccountWork) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s/%d", w.SiteBaseURL, w.RemoteID))))
 }

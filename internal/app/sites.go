@@ -180,6 +180,15 @@ func (a *App) updateSite(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 	}
+	if input.APIKey != "" {
+		current, e := a.siteSecret(r.Context(), siteID, identity.ID)
+		if e != nil {
+			return e
+		}
+		if plain, e := a.cipher.Decrypt(current.APIKeyCiphertext, "site:"+siteID); e == nil && plain == input.APIKey {
+			sealed = current.APIKeyCiphertext
+		}
+	}
 	command, err := a.db.Exec(r.Context(), `
 		UPDATE sites SET name=$3,base_url=$4,
 		 api_key_ciphertext=CASE WHEN $5<>'' THEN $5 ELSE api_key_ciphertext END,

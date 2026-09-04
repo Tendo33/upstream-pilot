@@ -102,6 +102,7 @@ func (a *App) Router() http.Handler {
 				group.Put("/config", a.wrap(a.updateGroupRateConfig))
 				group.Post("/apply", a.wrap(a.applyGroupRateHandler))
 			})
+			protected.Get("/quality/incidents", a.wrap(a.incidentsHandler))
 			protected.Get("/events", a.wrap(a.listEvents))
 			protected.Get("/settings/balance-alert", a.wrap(a.getBalanceAlertSettingsHandler))
 			protected.Put("/settings/balance-alert", a.wrap(a.updateBalanceAlertSettingsHandler))

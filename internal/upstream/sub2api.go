@@ -47,6 +47,9 @@ type Sub2AccountGroup struct {
 }
 
 type Sub2Account struct {
+	Native                                   NativeConstraints  `json:"-"`
+	SourceMappingFingerprint                 string             `json:"-"`
+	SourceMappingKnown                       bool               `json:"-"`
 	LoadFactor                               *int               `json:"load_factor"`
 	Concurrency                              *int               `json:"concurrency"`
 	ID                                       int64              `json:"id"`
@@ -71,8 +74,9 @@ func (a *Sub2Account) UnmarshalJSON(data []byte) error {
 	type accountAlias Sub2Account
 	var payload struct {
 		*accountAlias
-		Credentials json.RawMessage `json:"credentials"`
-		Extra       json.RawMessage `json:"extra"`
+		Credentials       json.RawMessage `json:"credentials"`
+		Extra             json.RawMessage `json:"extra"`
+		CredentialsStatus map[string]bool `json:"credentials_status"`
 	}
 	payload.accountAlias = (*accountAlias)(a)
 	a.SourceCredentialsPresent = false
@@ -84,6 +88,16 @@ func (a *Sub2Account) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return err
 	}
+	a.Native = parseNativeConstraints(data, *a)
+	a.SourceMappingKnown = a.Native.MappingKnown
+	if a.SourceMappingKnown {
+		raw, _ := json.Marshal(struct {
+			Mapping     map[string]string
+			Passthrough bool
+		}{a.Native.Mapping, a.Native.Passthrough})
+		sum := sha256.Sum256(raw)
+		a.SourceMappingFingerprint = hex.EncodeToString(sum[:])
+	}
 	a.SourceTypeHint = inferSourceTypeHint(a.Platform, a.Type, payload.Credentials, payload.Extra)
 	if payload.Credentials == nil {
 		return nil
@@ -91,6 +105,9 @@ func (a *Sub2Account) UnmarshalJSON(data []byte) error {
 	a.SourceCredentialsPresent = true
 	a.ObservedSourceBaseURLKnown, a.ObservedSourceBaseURL = observeSourceBaseURL(payload.Credentials)
 	a.ObservedSourceCredentialFingerprintKnown, a.ObservedSourceCredentialFingerprint = observeSourceCredentialFingerprint(payload.Credentials)
+	if payload.CredentialsStatus["has_api_key"] && a.ObservedSourceCredentialFingerprint == "" {
+		a.ObservedSourceCredentialFingerprintKnown = false
+	}
 	return nil
 }
 
@@ -403,7 +420,7 @@ func (c *Sub2Client) fillMissingAccountSourceURLs(ctx context.Context, accounts 
 	missing := make([]int64, 0)
 	for index := range accounts {
 		indexes[accounts[index].ID] = index
-		if !accounts[index].SourceCredentialsPresent {
+		if !accounts[index].SourceCredentialsPresent || !accounts[index].ObservedSourceCredentialFingerprintKnown {
 			missing = append(missing, accounts[index].ID)
 		}
 	}

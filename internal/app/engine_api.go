@@ -77,7 +77,7 @@ func (a *App) engineReferenceHandler(w http.ResponseWriter, r *http.Request) err
 		if err != nil {
 			return err
 		}
-		command, err := a.db.Exec(r.Context(), `UPDATE upstream_accounts SET price_reference_rate=observed_cost_rate WHERE id=$1 AND observed_cost_rate=$2 AND price_status='ok' AND last_rate_sync_at>now()-$3*interval '1 second'`, id, input.Rate, p.FreshSeconds)
+		command, err := a.db.Exec(r.Context(), `UPDATE upstream_accounts SET price_reference_rate=observed_cost_rate WHERE id=$1 AND observed_cost_rate=$2 AND price_status='ok' AND source_generation=$4 AND price_source_generation=$4 AND last_rate_sync_at>now()-$3*interval '1 second'`, id, input.Rate, p.FreshSeconds, work.SourceGeneration)
 		if err != nil {
 			return err
 		}

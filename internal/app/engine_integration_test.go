@@ -19,7 +19,7 @@ import (
 func seedEngineSamples(t *testing.T, a *App, w AccountWork, id string, n int, success bool, ms, age int) {
 	t.Helper()
 	for i := 0; i < n; i++ {
-		_, err := a.db.Exec(context.Background(), `INSERT INTO probe_attempts(id,owner_id,site_id,account_id,kind,success,model,first_content_ms,duration_ms,failure_reason,created_at) VALUES($1,$2,$3,$4,'manual',$5,'test-model',$6,$6,'UPSTREAM',now()-$7*interval '1 second')`, uuid.NewString(), w.OwnerID, w.SiteID, id, success, ms, age+i)
+		_, err := a.db.Exec(context.Background(), `INSERT INTO probe_attempts(id,owner_id,site_id,account_id,kind,success,model,first_content_ms,duration_ms,failure_reason,created_at,source_generation) VALUES($1,$2,$3,$4,'manual',$5,'test-model',$6,$6,'UPSTREAM',now()-$7*interval '1 second',(SELECT source_generation FROM upstream_accounts WHERE id=$4))`, uuid.NewString(), w.OwnerID, w.SiteID, id, success, ms, age+i)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -34,13 +34,14 @@ func seedEnginePool(t *testing.T, a *App, w AccountWork, priority int) (string, 
 		args []any
 	}{
 		{`INSERT INTO upstream_groups(id,site_id,remote_id,name) VALUES($1,$2,1,'engine-pool')`, []any{g, w.SiteID}},
-		{`INSERT INTO upstream_accounts(id,site_id,remote_id,name,remote_status,schedulable,priority,probe_model) VALUES($1,$2,8,'backup','active',true,$3,'test-model')`, []any{other, w.SiteID, priority}},
+		{`INSERT INTO upstream_accounts(id,site_id,remote_id,name,platform,account_type,remote_status,schedulable,priority,probe_model) VALUES($1,$2,8,'backup','openai','apikey','active',true,$3,'test-model')`, []any{other, w.SiteID, priority}},
 		{`INSERT INTO account_group_memberships(account_id,group_id,site_id) VALUES($1,$3,$4),($2,$3,$4)`, []any{w.ID, other, g, w.SiteID}},
 	} {
 		if _, err := a.db.Exec(ctx, q.sql, q.args...); err != nil {
 			t.Fatal(err)
 		}
 	}
+	engineRegressionSQL(t, a, `UPDATE upstream_accounts SET native_constraints=(SELECT native_constraints FROM upstream_accounts WHERE id=$2),native_checked_at=now() WHERE id=$1`, other, w.ID)
 	return g, other
 }
 func TestEngineSlowWindowAndPinnedBackupOrdering(t *testing.T) {
@@ -167,7 +168,7 @@ func TestEngineConcurrentPriceChangeAndStableReference(t *testing.T) {
 	if n != 2 || events != 1 || reference != 1 {
 		t.Fatalf("duplicate/lost reference %d %d %.2f", n, events, reference)
 	}
-	if _, err := a.db.Exec(ctx, `UPDATE upstream_accounts SET config_generation=config_generation+1 WHERE id=$1`, w.ID); err != nil {
+	if _, err := a.db.Exec(ctx, `UPDATE upstream_accounts SET source_generation=source_generation+1 WHERE id=$1`, w.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.persistRateObservation(ctx, w, rateSyncOutcome{SourceRate: 3, EffectiveRate: 3}); err == nil {
@@ -178,8 +179,8 @@ func TestEngineConcurrentPriceChangeAndStableReference(t *testing.T) {
 	if err := a.db.QueryRow(ctx, `SELECT price_status FROM upstream_accounts WHERE id=$1`, w.ID).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
-	if status != "ok" {
-		t.Fatal("stale error overwrote valid price")
+	if status != "unknown" {
+		t.Fatal("stale error overwrote source invalidation")
 	}
 }
 func TestEngineStaleBackupMatchesDashboardAndBlocksPause(t *testing.T) {
@@ -199,7 +200,7 @@ func TestEngineStaleBackupMatchesDashboardAndBlocksPause(t *testing.T) {
 	limit := 10.0
 	p.LowBalance = &limit
 	setTestQualityPolicy(t, a, w.ID, p)
-	if _, err := a.db.Exec(ctx, `INSERT INTO account_balance_snapshots(account_id,cache_key,status,remaining,checked_at) VALUES($1,'test','ok',0,now())`, w.ID); err != nil {
+	if _, err := a.db.Exec(ctx, `INSERT INTO account_balance_snapshots(account_id,cache_key,status,remaining,checked_at) VALUES($1,$2,'ok',0,now())`, w.ID, qualityTestBalanceKey(t, a, w.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.evaluateQuality(ctx, w, w.OwnerID); err != nil {

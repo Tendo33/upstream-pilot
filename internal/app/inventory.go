@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -105,6 +106,13 @@ func (a *App) syncSiteLocked(ctx context.Context, siteID, ownerFilter, actorID, 
 			 deleted_at=NULL,observed_at=now(),updated_at=now()
 			RETURNING id`, localID, siteID, account.ID, account.Name, account.Platform, account.Type, statusText(account.Status), account.Schedulable, account.Priority, account.RateMultiplier, account.UpdatedAt, account.ObservedSourceBaseURL, account.ObservedSourceCredentialFingerprint, initialSourceType, defaultProbeModel, account.ObservedSourceBaseURLKnown, account.ObservedSourceCredentialFingerprintKnown, detectedSourceType != "", inventoryStartedAt).Scan(&localID)
 		if err != nil {
+			return err
+		}
+		native, marshalErr := json.Marshal(account.Native)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if _, err = tx.Exec(ctx, `UPDATE upstream_accounts SET native_constraints=$2,native_checked_at=now(),source_mapping_fingerprint=CASE WHEN $3 THEN $4 ELSE source_mapping_fingerprint END WHERE id=$1`, localID, native, account.SourceMappingKnown, account.SourceMappingFingerprint); err != nil {
 			return err
 		}
 		remoteAccountIDs = append(remoteAccountIDs, account.ID)

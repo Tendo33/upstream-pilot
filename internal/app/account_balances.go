@@ -23,6 +23,7 @@ type accountBalancesInput struct {
 }
 
 type accountBalanceWork struct {
+	SourceGeneration                    int64
 	ID                                  string
 	OwnerID                             string
 	SiteID                              string
@@ -46,8 +47,9 @@ type accountBalanceResult struct {
 }
 
 type accountBalanceSnapshot struct {
-	CacheKey  string
-	CheckedAt time.Time
+	SourceGeneration int64
+	CacheKey         string
+	CheckedAt        time.Time
 	upstream.BalanceResult
 }
 
@@ -84,7 +86,7 @@ func (a *App) accountBalancesHandler(w http.ResponseWriter, r *http.Request) err
 	for index, work := range works {
 		cacheKey := accountBalanceCacheKey(work)
 		snapshot, ok := snapshots[work.ID]
-		if !ok || snapshot.CacheKey != cacheKey {
+		if !ok || snapshot.SourceGeneration != work.SourceGeneration || snapshot.CacheKey != cacheKey {
 			refreshNeeded = true
 			results[index] = accountBalanceResult{
 				AccountID: work.ID,
@@ -131,7 +133,7 @@ func normalizeBalanceAccountIDs(raw []string) ([]string, *apiError) {
 
 func (a *App) loadAccountBalanceWork(ctx context.Context, ownerID string, accountIDs []string) ([]accountBalanceWork, error) {
 	rows, err := a.db.Query(ctx, `
-		SELECT a.id::text,s.owner_id::text,a.site_id::text,s.name,s.base_url,s.api_key_ciphertext,a.remote_id,a.source_type,a.source_base_url,a.observed_source_base_url,COALESCE(a.observed_source_credential_fingerprint,''),a.source_credential_ciphertext,a.source_user_id
+		SELECT a.id::text,s.owner_id::text,a.site_id::text,s.name,s.base_url,s.api_key_ciphertext,a.remote_id,a.source_type,a.source_base_url,a.observed_source_base_url,COALESCE(a.observed_source_credential_fingerprint,''),a.source_credential_ciphertext,a.source_user_id,a.source_generation
 		FROM upstream_accounts a JOIN sites s ON s.id=a.site_id
 		WHERE s.owner_id=$1 AND a.deleted_at IS NULL
 		  AND a.id=ANY(string_to_array($2, ',')::uuid[])`, ownerID, strings.Join(accountIDs, ","))
@@ -145,7 +147,7 @@ func (a *App) loadAccountBalanceWork(ctx context.Context, ownerID string, accoun
 		var sourceCredential *string
 		if err := rows.Scan(
 			&work.ID, &work.OwnerID, &work.SiteID, &work.SiteName, &work.SiteBaseURL, &work.SiteAPIKeyCiphertext, &work.RemoteID,
-			&work.SourceType, &work.SourceBaseURL, &work.ObservedSourceBaseURL, &work.ObservedSourceCredentialFingerprint, &sourceCredential, &work.SourceUserID,
+			&work.SourceType, &work.SourceBaseURL, &work.ObservedSourceBaseURL, &work.ObservedSourceCredentialFingerprint, &sourceCredential, &work.SourceUserID, &work.SourceGeneration,
 		); err != nil {
 			return nil, err
 		}

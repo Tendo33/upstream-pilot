@@ -1171,3 +1171,7 @@ code, pre, .mono { font-family: var(--font-mono); }
 .quality-group-select:focus-visible { outline:2px solid var(--contrast); outline-offset:4px; border-radius:4px; }
 
 .pilot-mark { width: 27px; height: 27px; flex: 0 0 27px; }
+
+.quality-checkbox-line { display:flex; align-items:center; gap:8px; font-size:14px; }
+.quality-notification .quality-incident-time { color:var(--muted); }
+@media (max-width:600px) { .quality-note,.quality-traffic { font-size:14px; } }

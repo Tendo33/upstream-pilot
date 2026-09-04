@@ -1,6 +1,9 @@
 package app
 
-import "time"
+import (
+	"github.com/Tendo33/upstream-pilot/internal/upstream"
+	"time"
+)
 
 type User struct {
 	ID          string     `json:"id"`
@@ -122,7 +125,10 @@ type SiteSecret struct {
 }
 
 type AccountWork struct {
-	ConfigGeneration int64
+	ConfigGeneration  int64
+	SourceGeneration  int64
+	NativeConstraints upstream.NativeConstraints
+	NativeCheckedAt   *time.Time
 	Account
 	OwnerID                    string
 	SiteBaseURL                string

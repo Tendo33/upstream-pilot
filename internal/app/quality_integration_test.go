@@ -17,6 +17,7 @@ import (
 	"github.com/Tendo33/upstream-pilot/internal/config"
 	"github.com/Tendo33/upstream-pilot/internal/database"
 	"github.com/Tendo33/upstream-pilot/internal/quality"
+	"github.com/Tendo33/upstream-pilot/internal/upstream"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -42,7 +43,24 @@ func (s *qualityTestRemote) serve(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
-	send := func(v any) { _ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": v}) }
+	send := func(v any) {
+		if account, ok := v.(map[string]any); ok && account["id"] != nil && account["schedulable"] != nil {
+			account["platform"] = "openai"
+			account["type"] = "apikey"
+			account["rate_limit_reset_at"] = nil
+			account["overload_until"] = nil
+			account["temp_unschedulable_until"] = nil
+			account["expires_at"] = nil
+			account["auto_pause_on_expired"] = true
+			account["extra"] = map[string]any{}
+			account["credentials"] = map[string]any{"model_mapping": map[string]string{"test-model": "test-model"}}
+			account["account_groups"] = []map[string]any{{"group_id": 1}}
+			if account["concurrency"] == nil {
+				account["concurrency"] = 8
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": v})
+	}
 	switch {
 	case r.URL.Path == "/v1/chat/completions":
 		id := 7
@@ -164,6 +182,11 @@ func newQualityIntegration(t *testing.T) (*App, AccountWork, *qualityTestRemote,
 		if _, err = pool.Exec(ctx, q.sql, q.args...); err != nil {
 			t.Fatal(err)
 		}
+	}
+	native := upstream.NativeConstraints{Known: true, GroupsKnown: true, Groups: []int64{1}, MappingKnown: true, Concurrency: new(8)}
+	rawNative, _ := json.Marshal(native)
+	if _, err = pool.Exec(ctx, `UPDATE upstream_accounts SET native_constraints=$2,native_checked_at=now() WHERE id=$1`, id, rawNative); err != nil {
+		t.Fatal(err)
 	}
 	work, err := app.loadAccountWork(ctx, id, owner)
 	if err != nil {
@@ -382,7 +405,7 @@ func TestQualityNotificationDeduplicatesCountersButReportsNewRisk(t *testing.T) 
 	limit := 10.0
 	p.LowBalance = &limit
 	setTestQualityPolicy(t, a, w.ID, p)
-	if _, err := a.db.Exec(ctx, `INSERT INTO account_balance_snapshots(account_id,cache_key,status,remaining,checked_at) VALUES($1,'test','ok',1,now())`, w.ID); err != nil {
+	if _, err := a.db.Exec(ctx, `INSERT INTO account_balance_snapshots(account_id,cache_key,status,remaining,checked_at) VALUES($1,$2,'ok',1,now())`, w.ID, qualityTestBalanceKey(t, a, w.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.evaluateQuality(ctx, w, w.OwnerID); err != nil {
@@ -485,7 +508,7 @@ func TestQualityPauseRequiresIndependentSwitchAndHealthyModelBackup(t *testing.T
 	}{
 		{`INSERT INTO upstream_groups(id,site_id,remote_id,name) VALUES($1,$2,1,'pool')`, []any{group, w.SiteID}},
 		{`INSERT INTO account_group_memberships(account_id,group_id,site_id) VALUES($1,$2,$3)`, []any{w.ID, group, w.SiteID}},
-		{`INSERT INTO account_balance_snapshots(account_id,cache_key,status,remaining,checked_at) VALUES($1,'test','ok',0,now())`, []any{w.ID}},
+		{`INSERT INTO account_balance_snapshots(account_id,cache_key,status,remaining,checked_at) VALUES($1,$2,'ok',0,now())`, []any{w.ID, qualityTestBalanceKey(t, a, w.ID)}},
 	} {
 		if _, err := a.db.Exec(ctx, q.sql, q.args...); err != nil {
 			t.Fatal(err)
@@ -515,7 +538,7 @@ func TestQualityPauseRequiresIndependentSwitchAndHealthyModelBackup(t *testing.T
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO upstream_accounts(id,site_id,remote_id,name,remote_status,schedulable,priority,probe_model) VALUES($1,$2,8,'backup','active',true,20,'other-model')`, []any{other, w.SiteID}},
+		{`INSERT INTO upstream_accounts(id,site_id,remote_id,name,platform,account_type,remote_status,schedulable,priority,probe_model) VALUES($1,$2,8,'backup','openai','apikey','active',true,20,'other-model')`, []any{other, w.SiteID}},
 		{`INSERT INTO account_group_memberships(account_id,group_id,site_id) VALUES($1,$2,$3)`, []any{other, group, w.SiteID}},
 		{`INSERT INTO quality_states(account_id,baseline_priority,desired_priority,status,last_sample_at) VALUES($1,20,20,'healthy',now())`, []any{other}},
 	} {
@@ -577,4 +600,17 @@ func TestQualityAdminAuthenticationFailureIsNotSupplierFailure(t *testing.T) {
 	if d.State.Status != "unknown" || d.State.Desired != 20 || len(remote.writes) > 0 {
 		t.Fatalf("admin failure affected supplier: %+v writes=%v", d, remote.writes)
 	}
+}
+
+func qualityTestBalanceKey(t *testing.T, a *App, id string) string {
+	t.Helper()
+	w, err := a.loadAccountWork(context.Background(), id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	works, err := a.loadAccountBalanceWork(context.Background(), w.OwnerID, []string{id})
+	if err != nil || len(works) != 1 {
+		t.Fatalf("balance work: %v", err)
+	}
+	return accountBalanceCacheKey(works[0])
 }

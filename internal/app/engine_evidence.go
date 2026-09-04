@@ -79,6 +79,13 @@ func validateEngineEvidence(works []engineWork, components map[string]string, id
 }
 
 func (a *App) requireCurrentEvidence(ctx context.Context, p *engineWork) error {
+	var unchanged bool
+	if err := a.db.QueryRow(ctx, `SELECT source_generation=$2 AND config_generation=$3 AND deleted_at IS NULL FROM upstream_accounts WHERE id=$1`, p.Work.ID, p.Work.SourceGeneration, p.Work.ConfigGeneration).Scan(&unchanged); err != nil {
+		return err
+	}
+	if !unchanged {
+		return errEngineReplan
+	}
 	snap, err := a.qualitySnapshot(ctx, p.Work, p.Policy)
 	if err != nil {
 		return err

@@ -9,29 +9,32 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type TrafficSummary struct {
-	FirstContentAt      *time.Time `json:"first_content_at"`
-	FirstContentSamples int        `json:"first_content_samples"`
-	LatestAt            *time.Time `json:"latest_at"`
-	Status              string     `json:"status"`
-	Message             string     `json:"message"`
-	Model               string     `json:"model"`
-	Total               int        `json:"total"`
-	Failed              int        `json:"failed"`
-	FirstContentP95     *int       `json:"first_content_p95_ms"`
-	Truncated           bool       `json:"truncated"`
-	WindowStart         time.Time  `json:"window_start"`
-	WindowEnd           time.Time  `json:"window_end"`
+	FailureCategories   map[string]int `json:"failure_categories"`
+	ExcludedErrors      int            `json:"excluded_errors"`
+	FirstContentAt      *time.Time     `json:"first_content_at"`
+	FirstContentSamples int            `json:"first_content_samples"`
+	LatestAt            *time.Time     `json:"latest_at"`
+	Status              string         `json:"status"`
+	Message             string         `json:"message"`
+	Model               string         `json:"model"`
+	Total               int            `json:"total"`
+	Failed              int            `json:"failed"`
+	FirstContentP95     *int           `json:"first_content_p95_ms"`
+	Truncated           bool           `json:"truncated"`
+	WindowStart         time.Time      `json:"window_start"`
+	WindowEnd           time.Time      `json:"window_end"`
 }
 
 // RecentTraffic reads bounded samples from the admin request log, not the
 // public group endpoint. Missing TTFT fields remain unknown rather than zero.
 func (c *Sub2Client) RecentTraffic(ctx context.Context, id int64, model string) (TrafficSummary, error) {
 	now := time.Now().UTC()
-	s := TrafficSummary{Status: "unknown", Model: model, WindowStart: now.Add(-15 * time.Minute), WindowEnd: now}
+	s := TrafficSummary{FailureCategories: map[string]int{}, Status: "unknown", Model: model, WindowStart: now.Add(-15 * time.Minute), WindowEnd: now}
 	query := url.Values{"account_id": {strconv.FormatInt(id, 10)}, "model": {model}, "start_time": {s.WindowStart.Format(time.RFC3339)}, "end_time": {now.Format(time.RFC3339)}, "kind": {"all"}, "page_size": {"100"}, "page": {"1"}, "sort": {"created_at_desc"}}
 	times := []int{}
 	for page := 1; page <= 3; page++ {
@@ -59,6 +62,8 @@ func (c *Sub2Client) RecentTraffic(ctx context.Context, id int64, model string) 
 				Kind           string    `json:"kind"`
 				StatusCode     int       `json:"status_code"`
 				Phase          string    `json:"phase"`
+				Reason         string    `json:"error_type"`
+				Code           string    `json:"code"`
 				CreatedAt      time.Time `json:"created_at"`
 				FirstContent   *int      `json:"time_to_first_token_ms"`
 				StreamComplete *bool     `json:"stream_complete"`
@@ -81,8 +86,13 @@ func (c *Sub2Client) RecentTraffic(ctx context.Context, id int64, model string) 
 				continue
 			}
 			// Invalid client input is not evidence that an upstream is broken.
-			if item.Kind == "error" && item.StatusCode < 500 && item.StatusCode != 429 && item.Phase != "upstream" {
-				continue
+			if item.Kind == "error" {
+				category, supplier := classifyTrafficFailure(item.StatusCode, item.Phase, item.Reason+" "+item.Code)
+				if !supplier {
+					s.ExcludedErrors++
+					continue
+				}
+				s.FailureCategories[category]++
 			}
 			if s.LatestAt == nil || item.CreatedAt.After(*s.LatestAt) {
 				v := item.CreatedAt
@@ -118,4 +128,35 @@ func (c *Sub2Client) RecentTraffic(ctx context.Context, id int64, model string) 
 		s.Message = "该时间窗口没有可用真实请求样本"
 	}
 	return s, nil
+}
+
+// The request phase takes precedence over HTTP status: a customer quota/429 or
+// client authentication error is not a supplier failure. Account auth is.
+func classifyTrafficFailure(status int, phase, reason string) (string, bool) {
+	phase = strings.ToLower(strings.TrimSpace(phase))
+	reason = strings.ToLower(reason)
+	switch phase {
+	case "auth", "request", "routing", "internal":
+		return phase, false
+	case "account_auth":
+		return "upstream_auth", true
+	case "network":
+		return "network", true
+	}
+	if phase != "upstream" && status < 500 && status != 429 {
+		return "unclassified", false
+	}
+	if strings.Contains(reason, "insufficient_quota") || strings.Contains(reason, "balance") || status == 402 {
+		return "balance", true
+	}
+	if status == 401 || status == 403 {
+		return "upstream_auth", true
+	}
+	if status == 429 {
+		return "rate_limit", true
+	}
+	if status == 400 || status == 404 {
+		return "model_or_request", true
+	}
+	return "upstream_http", true
 }

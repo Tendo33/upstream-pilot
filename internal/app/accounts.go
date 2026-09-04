@@ -48,7 +48,7 @@ var accountSelect = fmt.Sprintf(`
 		FROM (
 			SELECT attempts.id,attempts.success,attempts.created_at
 			FROM probe_attempts attempts
-			WHERE attempts.account_id=a.id
+			WHERE attempts.account_id=a.id AND attempts.source_generation=a.source_generation AND NOT attempts.control_error
 			ORDER BY attempts.created_at DESC,attempts.id DESC
 			LIMIT %d
 		) recent
@@ -439,6 +439,11 @@ func (a *App) updateAccountSettings(w http.ResponseWriter, r *http.Request) erro
 			return err
 		}
 	}
+	if input.SourceCredential != "" && current.SourceCredentialCiphertext != "" {
+		if plain, e := a.cipher.Decrypt(current.SourceCredentialCiphertext, "account:"+accountID); e == nil && plain == input.SourceCredential {
+			credentialCiphertext = current.SourceCredentialCiphertext
+		}
+	}
 	requestCtx, cancel := context.WithTimeout(r.Context(), accountSchedulingOperationTimeout)
 	defer cancel()
 	var rowsAffected int64
@@ -708,12 +713,13 @@ func (a *App) bulkUpdateAccountSettings(w http.ResponseWriter, r *http.Request) 
 func (a *App) loadAccountWork(ctx context.Context, accountID, ownerFilter string) (AccountWork, error) {
 	var work AccountWork
 	var sourceCredential *string
+	var native []byte
 	err := a.db.QueryRow(ctx, `
 		SELECT a.id,a.site_id,s.owner_id,s.name,s.base_url,s.api_key_ciphertext,a.remote_id,a.name,a.platform,a.account_type,a.remote_status,
 		 a.schedulable,a.priority,a.rate_multiplier,a.health_enabled,a.probe_interval_seconds,a.probe_timeout_seconds,a.failure_threshold,a.recovery_success_threshold,a.probe_model,
 		 a.rate_sync_enabled,a.rate_sync_interval_seconds,a.source_type,a.source_base_url,a.source_credential_ciphertext,a.source_user_id,a.source_group,
 		 a.recharge_ratio,a.source_rate_multiplier,a.priority_enabled,a.guard_enabled,a.guard_operator,a.guard_priority,a.guard_holding,
-		 a.health_state,a.consecutive_failures,a.consecutive_recovery_successes,a.managed_hold,a.config_generation
+		 a.health_state,a.consecutive_failures,a.consecutive_recovery_successes,a.managed_hold,a.config_generation,a.source_generation,a.native_constraints,a.native_checked_at
 		FROM upstream_accounts a JOIN sites s ON s.id=a.site_id
 		WHERE a.id=$1 AND s.owner_id=COALESCE(NULLIF($2,'')::uuid,s.owner_id) AND a.deleted_at IS NULL`, accountID, ownerFilter).Scan(
 		&work.ID, &work.SiteID, &work.OwnerID, &work.SiteName, &work.SiteBaseURL, &work.SiteAPIKeyCiphertext,
@@ -722,11 +728,14 @@ func (a *App) loadAccountWork(ctx context.Context, accountID, ownerFilter string
 		&work.ProbeModel, &work.RateSyncEnabled, &work.RateSyncIntervalSeconds, &work.SourceType, &work.SourceBaseURL,
 		&sourceCredential, &work.SourceUserID, &work.SourceGroup, &work.RechargeRatio, &work.SourceRateMultiplier,
 		&work.PriorityEnabled, &work.GuardEnabled, &work.GuardOperator, &work.GuardPriority, &work.GuardHolding,
-		&work.HealthState, &work.ConsecutiveFailures, &work.ConsecutiveRecoverySuccesses, &work.ManagedHold, &work.ConfigGeneration,
+		&work.HealthState, &work.ConsecutiveFailures, &work.ConsecutiveRecoverySuccesses, &work.ManagedHold, &work.ConfigGeneration, &work.SourceGeneration, &native, &work.NativeCheckedAt,
 	)
 	if sourceCredential != nil {
 		work.SourceCredentialCiphertext = *sourceCredential
 		work.SourceCredentialSet = true
+	}
+	if err == nil {
+		err = json.Unmarshal(native, &work.NativeConstraints)
 	}
 	return work, err
 }
@@ -840,13 +849,20 @@ func (a *App) runProbe(ctx context.Context, work AccountWork, kind, actorID stri
 	// A completed model probe is durable before any local state transition or
 	// remote scheduling side effect. Control-plane failures must not erase an
 	// otherwise deterministic uptime sample.
-	_, err = a.db.Exec(persistenceCtx, `INSERT INTO probe_attempts(id,owner_id,site_id,account_id,kind,success,latency_ms,model,message,failure_reason,http_status,first_content_ms,duration_ms,actual_model,stream_complete,control_error) VALUES($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),$9,$10,$11,$12,$13,$14,$15,$16)`, uuid.NewString(), work.OwnerID, work.SiteID, work.ID, kind, result.Success, latency, model, result.Message, failureReason, failureHTTPStatus, result.FirstContentMS, result.DurationMS, result.ActualModel, result.StreamComplete, result.ControlPlaneError)
+	_, err = a.db.Exec(persistenceCtx, `INSERT INTO probe_attempts(id,owner_id,site_id,account_id,kind,success,latency_ms,model,message,failure_reason,http_status,first_content_ms,duration_ms,actual_model,stream_complete,control_error,source_generation) VALUES($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),$9,$10,$11,$12,$13,$14,$15,$16,$17)`, uuid.NewString(), work.OwnerID, work.SiteID, work.ID, kind, result.Success, latency, model, result.Message, failureReason, failureHTTPStatus, result.FirstContentMS, result.DurationMS, result.ActualModel, result.StreamComplete, result.ControlPlaneError, work.SourceGeneration)
 	if err != nil {
 		return outcome, err
 	}
 
-	_, err = a.db.Exec(persistenceCtx, `UPDATE upstream_accounts SET health_state=$2,last_probe_at=now(),last_probe_latency_ms=$3,last_success_at=CASE WHEN $4 THEN now() ELSE last_success_at END,last_failure_at=CASE WHEN NOT $4 THEN now() ELSE last_failure_at END,last_failure_reason=$5,last_failure_http_status=$6,last_error=CASE WHEN $4 THEN NULL ELSE $7 END,consecutive_failures=CASE WHEN $4 THEN 0 ELSE consecutive_failures+1 END,next_probe_at=now()+probe_interval_seconds*interval '1 second',applied_probe_sequence=$8 WHERE id=$1 AND applied_probe_sequence<$8 AND scheduling_generation=$9`, work.ID, map[bool]string{true: "healthy", false: "failing"}[result.Success], latency, result.Success, failureReason, failureHTTPStatus, result.Message, token.Sequence, token.SchedulingGeneration)
+	_, err = a.db.Exec(persistenceCtx, `UPDATE upstream_accounts SET health_state=$2,last_probe_at=now(),last_probe_latency_ms=$3,last_success_at=CASE WHEN $4 THEN now() ELSE last_success_at END,last_failure_at=CASE WHEN NOT $4 THEN now() ELSE last_failure_at END,last_failure_reason=$5,last_failure_http_status=$6,last_error=CASE WHEN $4 THEN NULL ELSE $7 END,consecutive_failures=CASE WHEN $4 THEN 0 ELSE consecutive_failures+1 END,next_probe_at=now()+probe_interval_seconds*interval '1 second',applied_probe_sequence=$8 WHERE id=$1 AND applied_probe_sequence<$8 AND scheduling_generation=$9 AND source_generation=$10`, work.ID, map[bool]string{true: "healthy", false: "failing"}[result.Success], latency, result.Success, failureReason, failureHTTPStatus, result.Message, token.Sequence, token.SchedulingGeneration, work.SourceGeneration)
 	if err != nil {
+		return outcome, err
+	}
+	collectorMessage := ""
+	if result.ControlPlaneError {
+		collectorMessage = "账号探测管理接口失败，请检查站点权限与连通性"
+	}
+	if err = a.recordIncident(persistenceCtx, work, "collector_probe", collectorMessage); err != nil {
 		return outcome, err
 	}
 	_, err = a.db.Exec(persistenceCtx, `UPDATE sites SET next_reconcile_at=LEAST(next_reconcile_at,now()) WHERE id=$1`, work.SiteID)
@@ -1015,7 +1031,8 @@ func (a *App) recordRateFailure(ctx context.Context, work AccountWork, err error
 		 source_credential_state=CASE WHEN $3 THEN 'invalid' ELSE source_credential_state END,
 		 source_credential_checked_at=CASE WHEN $3 THEN now() ELSE source_credential_checked_at END,
 		 next_rate_sync_at=now()+rate_sync_interval_seconds*interval '1 second',work_lease_until=NULL,updated_at=now()
-		WHERE id=$1 AND config_generation=$4`, work.ID, message, credentialInvalid, work.ConfigGeneration)
+		WHERE id=$1 AND source_generation=$4`, work.ID, message, credentialInvalid, work.SourceGeneration)
+	_ = a.recordIncident(ctx, work, "collector_rate", "采购倍率采集失败："+message)
 	_ = a.audit(ctx, work.OwnerID, "", work.SiteID, work.ID, "account.rate_sync", "failed", map[string]any{"error": message})
 }
 
