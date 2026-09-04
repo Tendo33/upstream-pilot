@@ -15,8 +15,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"sub2api-upstream-manager/internal/health"
-	"sub2api-upstream-manager/internal/upstream"
+	"github.com/Tendo33/upstream-pilot/internal/health"
+	"github.com/Tendo33/upstream-pilot/internal/upstream"
 )
 
 const accountUptimeWindowSize = 60
@@ -465,7 +465,7 @@ func (a *App) updateAccountSettings(w http.ResponseWriter, r *http.Request) erro
 		 source_user_id=CASE WHEN $11='sub2api' THEN NULL ELSE NULLIF($16,'') END,
 		 source_group=CASE WHEN $11='sub2api' THEN NULL ELSE NULLIF($17,'') END,recharge_ratio=$18,
 		 priority_enabled=$19,guard_enabled=$20,guard_operator=$21,guard_priority=$22,
-		 next_probe_at=LEAST(next_probe_at,now()),next_rate_sync_at=LEAST(next_rate_sync_at,now()),updated_at=now()
+		 next_probe_at=LEAST(next_probe_at,now()),next_rate_sync_at=LEAST(next_rate_sync_at,now()),config_generation=config_generation+1,updated_at=now()
 		FROM sites s WHERE a.id=$1 AND a.site_id=s.id AND s.owner_id=$2 AND a.deleted_at IS NULL`,
 			accountID, identity.ID, input.HealthEnabled, input.ProbeIntervalSeconds, input.ProbeTimeoutSeconds, input.FailureThreshold, input.RecoverySuccessThreshold, input.ProbeModel,
 			input.RateSyncEnabled, input.RateSyncIntervalSeconds, input.SourceType, input.SourceTypeLocked, input.SourceBaseURL, credentialCiphertext, input.ClearSourceCredential,
@@ -512,17 +512,33 @@ func (a *App) bulkUpdateAccountSettings(w http.ResponseWriter, r *http.Request) 
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if input.Health != nil {
-		lockAccountIDs := append([]string(nil), accountIDs...)
-		sort.Strings(lockAccountIDs)
-		for _, accountID := range lockAccountIDs {
-			first, second, err := accountSchedulingLockKeys(accountID)
-			if err != nil {
-				return err
-			}
-			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1,$2)`, first, second); err != nil {
-				return err
-			}
+	// Lock every affected site in deterministic order before locking account rows.
+	siteRows, err := tx.Query(ctx, `SELECT DISTINCT site_id::text FROM upstream_accounts a JOIN sites s ON s.id=a.site_id WHERE a.id=ANY($1::uuid[]) AND s.owner_id=$2 ORDER BY site_id::text`, accountIDs, identity.ID)
+	if err != nil {
+		return err
+	}
+	siteIDs := []string{}
+	for siteRows.Next() {
+		var id string
+		if err = siteRows.Scan(&id); err != nil {
+			break
+		}
+		siteIDs = append(siteIDs, id)
+	}
+	if err == nil {
+		err = siteRows.Err()
+	}
+	siteRows.Close()
+	if err != nil {
+		return err
+	}
+	for _, id := range siteIDs {
+		first, second, err := accountSchedulingLockKeys(id)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1,$2)`, first, second); err != nil {
+			return err
 		}
 	}
 
@@ -598,6 +614,7 @@ func (a *App) bulkUpdateAccountSettings(w http.ResponseWriter, r *http.Request) 
 		 guard_priority=CASE WHEN $15 THEN $18 ELSE a.guard_priority END,
 		 next_probe_at=CASE WHEN $3 THEN LEAST(a.next_probe_at,now()) ELSE a.next_probe_at END,
 		 next_rate_sync_at=CASE WHEN $10 THEN LEAST(a.next_rate_sync_at,now()) ELSE a.next_rate_sync_at END,
+ config_generation=config_generation+1,
 		 updated_at=now()
 		FROM sites s
 		WHERE a.site_id=s.id AND s.owner_id=$2 AND a.deleted_at IS NULL
@@ -696,7 +713,7 @@ func (a *App) loadAccountWork(ctx context.Context, accountID, ownerFilter string
 		 a.schedulable,a.priority,a.rate_multiplier,a.health_enabled,a.probe_interval_seconds,a.probe_timeout_seconds,a.failure_threshold,a.recovery_success_threshold,a.probe_model,
 		 a.rate_sync_enabled,a.rate_sync_interval_seconds,a.source_type,a.source_base_url,a.source_credential_ciphertext,a.source_user_id,a.source_group,
 		 a.recharge_ratio,a.source_rate_multiplier,a.priority_enabled,a.guard_enabled,a.guard_operator,a.guard_priority,a.guard_holding,
-		 a.health_state,a.consecutive_failures,a.consecutive_recovery_successes,a.managed_hold
+		 a.health_state,a.consecutive_failures,a.consecutive_recovery_successes,a.managed_hold,a.config_generation
 		FROM upstream_accounts a JOIN sites s ON s.id=a.site_id
 		WHERE a.id=$1 AND s.owner_id=COALESCE(NULLIF($2,'')::uuid,s.owner_id) AND a.deleted_at IS NULL`, accountID, ownerFilter).Scan(
 		&work.ID, &work.SiteID, &work.OwnerID, &work.SiteName, &work.SiteBaseURL, &work.SiteAPIKeyCiphertext,
@@ -705,7 +722,7 @@ func (a *App) loadAccountWork(ctx context.Context, accountID, ownerFilter string
 		&work.ProbeModel, &work.RateSyncEnabled, &work.RateSyncIntervalSeconds, &work.SourceType, &work.SourceBaseURL,
 		&sourceCredential, &work.SourceUserID, &work.SourceGroup, &work.RechargeRatio, &work.SourceRateMultiplier,
 		&work.PriorityEnabled, &work.GuardEnabled, &work.GuardOperator, &work.GuardPriority, &work.GuardHolding,
-		&work.HealthState, &work.ConsecutiveFailures, &work.ConsecutiveRecoverySuccesses, &work.ManagedHold,
+		&work.HealthState, &work.ConsecutiveFailures, &work.ConsecutiveRecoverySuccesses, &work.ManagedHold, &work.ConfigGeneration,
 	)
 	if sourceCredential != nil {
 		work.SourceCredentialCiphertext = *sourceCredential
@@ -898,6 +915,33 @@ type rateSyncOutcome struct {
 }
 
 func (a *App) runRateSync(ctx context.Context, work AccountWork, actorID string) (rateSyncOutcome, error) {
+	var result rateSyncOutcome
+	// Serialize the HTTP collection too, so an older response cannot replace a
+	// newer observation. This lock has a separate namespace from site scheduling.
+	if a.priceSlots != nil {
+		select {
+		case a.priceSlots <- struct{}{}:
+			defer func() { <-a.priceSlots }()
+		case <-ctx.Done():
+			return result, ctx.Err()
+		}
+	}
+	first, second, err := accountSchedulingLockKeys(work.ID)
+	if err != nil {
+		return result, err
+	}
+	first ^= 0x35171923
+	err = withAccountSchedulingLockPool(ctx, pgxAccountSchedulingLockPool{pool: a.db}, first, second, accountSchedulingLockRetryDelay, func(_ accountSchedulingLockConnection) error {
+		fresh, e := a.loadAccountWork(ctx, work.ID, work.OwnerID)
+		if e != nil {
+			return e
+		}
+		result, e = a.collectRate(ctx, fresh, actorID)
+		return e
+	})
+	return result, err
+}
+func (a *App) collectRate(ctx context.Context, work AccountWork, actorID string) (rateSyncOutcome, error) {
 	client, err := a.clientForWork(work)
 	if err != nil {
 		return rateSyncOutcome{}, err
@@ -953,37 +997,9 @@ func (a *App) runRateSync(ctx context.Context, work AccountWork, actorID string)
 	if !isFinite(outcome.EffectiveRate) || outcome.EffectiveRate < 0 {
 		return outcome, errors.New("源站返回了无效倍率")
 	}
-	var oldRate *float64
-	priceErr := a.db.QueryRow(ctx, `SELECT effective_rate FROM upstream_price_history WHERE account_id=$1 ORDER BY checked_at DESC LIMIT 1`, work.ID).Scan(&oldRate)
-	if priceErr != nil && !errors.Is(priceErr, pgx.ErrNoRows) {
-		return outcome, priceErr
-	}
-	if oldRate == nil || math.Abs(*oldRate-outcome.EffectiveRate) > 1e-7 {
-		_, err = a.db.Exec(ctx, `INSERT INTO upstream_price_history(id,account_id,source_rate,effective_rate,endpoint) VALUES($1,$2,$3,$4,$5)`, uuid.NewString(), work.ID, outcome.SourceRate, outcome.EffectiveRate, outcome.Endpoint)
-		if err != nil {
-			return outcome, err
-		}
-		if oldRate != nil {
-			_, err = a.db.Exec(ctx, `INSERT INTO quality_notifications(id,owner_id,account_id,kind,message) VALUES($1,$2,$3,'price_change',$4)`, uuid.NewString(), work.OwnerID, work.ID, fmt.Sprintf("%s：成本倍率 %.4f → %.4f", work.Name, *oldRate, outcome.EffectiveRate))
-			if err != nil {
-				return outcome, err
-			}
-		}
-	}
-	isNewAPI := work.SourceType == "newapi"
-	_, err = a.db.Exec(ctx, `
-		UPDATE upstream_accounts SET
-		 observed_cost_rate=$2,source_rate_multiplier=$3,source_rate_endpoint=$4,last_rate_sync_at=now(),
-		 source_credential_state=CASE WHEN $5 THEN 'valid' ELSE source_credential_state END,
-		 source_credential_checked_at=CASE WHEN $5 THEN now() ELSE source_credential_checked_at END,
-		 next_rate_sync_at=now()+rate_sync_interval_seconds*interval '1 second',last_error=NULL,work_lease_until=NULL,updated_at=now()
-		WHERE id=$1`, work.ID, outcome.EffectiveRate, outcome.SourceRate, outcome.Endpoint, isNewAPI)
-	if err != nil {
+	if err = a.persistRateObservation(ctx, work, outcome); err != nil {
 		return outcome, err
 	}
-	_, _ = a.db.Exec(ctx, `UPDATE sites SET next_reconcile_at=LEAST(next_reconcile_at,now()) WHERE id=$1`, work.SiteID)
-	_ = a.audit(ctx, work.OwnerID, actorID, work.SiteID, work.ID, "account.rate_sync", "success", map[string]any{"source_rate": outcome.SourceRate, "effective_rate": outcome.EffectiveRate, "endpoint": outcome.Endpoint})
-
 	return outcome, nil
 }
 
@@ -995,11 +1011,11 @@ func (a *App) recordRateFailure(ctx context.Context, work AccountWork, err error
 	credentialInvalid := work.SourceType == "newapi" && upstream.IsNewAPIAuthenticationError(err)
 	_, _ = a.db.Exec(ctx, `
 		UPDATE upstream_accounts SET
-		 last_error=$2,
+		 last_error=$2,price_status='error',last_rate_attempt_at=now(),
 		 source_credential_state=CASE WHEN $3 THEN 'invalid' ELSE source_credential_state END,
 		 source_credential_checked_at=CASE WHEN $3 THEN now() ELSE source_credential_checked_at END,
 		 next_rate_sync_at=now()+rate_sync_interval_seconds*interval '1 second',work_lease_until=NULL,updated_at=now()
-		WHERE id=$1`, work.ID, message, credentialInvalid)
+		WHERE id=$1 AND config_generation=$4`, work.ID, message, credentialInvalid, work.ConfigGeneration)
 	_ = a.audit(ctx, work.OwnerID, "", work.SiteID, work.ID, "account.rate_sync", "failed", map[string]any{"error": message})
 }
 

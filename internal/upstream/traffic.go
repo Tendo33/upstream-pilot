@@ -13,15 +13,18 @@ import (
 )
 
 type TrafficSummary struct {
-	Status          string    `json:"status"`
-	Message         string    `json:"message"`
-	Model           string    `json:"model"`
-	Total           int       `json:"total"`
-	Failed          int       `json:"failed"`
-	FirstContentP95 *int      `json:"first_content_p95_ms"`
-	Truncated       bool      `json:"truncated"`
-	WindowStart     time.Time `json:"window_start"`
-	WindowEnd       time.Time `json:"window_end"`
+	FirstContentAt      *time.Time `json:"first_content_at"`
+	FirstContentSamples int        `json:"first_content_samples"`
+	LatestAt            *time.Time `json:"latest_at"`
+	Status              string     `json:"status"`
+	Message             string     `json:"message"`
+	Model               string     `json:"model"`
+	Total               int        `json:"total"`
+	Failed              int        `json:"failed"`
+	FirstContentP95     *int       `json:"first_content_p95_ms"`
+	Truncated           bool       `json:"truncated"`
+	WindowStart         time.Time  `json:"window_start"`
+	WindowEnd           time.Time  `json:"window_end"`
 }
 
 // RecentTraffic reads bounded samples from the admin request log, not the
@@ -81,12 +84,20 @@ func (c *Sub2Client) RecentTraffic(ctx context.Context, id int64, model string) 
 			if item.Kind == "error" && item.StatusCode < 500 && item.StatusCode != 429 && item.Phase != "upstream" {
 				continue
 			}
+			if s.LatestAt == nil || item.CreatedAt.After(*s.LatestAt) {
+				v := item.CreatedAt
+				s.LatestAt = &v
+			}
 			s.Total++
 			if item.Kind == "error" || (item.StreamComplete != nil && !*item.StreamComplete) {
 				s.Failed++
 			}
 			if item.Kind == "success" && item.FirstContent != nil && *item.FirstContent >= 0 {
 				times = append(times, *item.FirstContent)
+				if s.FirstContentAt == nil || item.CreatedAt.After(*s.FirstContentAt) {
+					at := item.CreatedAt
+					s.FirstContentAt = &at
+				}
 			}
 		}
 		if len(result.Items) < 100 || page*100 >= result.Total {
@@ -96,6 +107,7 @@ func (c *Sub2Client) RecentTraffic(ctx context.Context, id int64, model string) 
 			s.Truncated = true
 		}
 	}
+	s.FirstContentSamples = len(times)
 	s.Status = "ok"
 	if len(times) > 0 {
 		sort.Ints(times)

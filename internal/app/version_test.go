@@ -9,23 +9,23 @@ import (
 )
 
 func TestParseGitHubReleaseLocation(t *testing.T) {
-	tag, releaseURL, err := parseGitHubReleaseLocation("https://github.com/langrenjh-alt/S2AM-GO/releases/tag/v0.3.0")
+	tag, releaseURL, err := parseGitHubReleaseLocation("https://github.com/Tendo33/upstream-pilot/releases/tag/v0.3.0")
 	if err != nil {
 		t.Fatalf("parseGitHubReleaseLocation() error = %v", err)
 	}
 	if tag != "v0.3.0" {
 		t.Fatalf("tag = %q, want v0.3.0", tag)
 	}
-	if releaseURL != "https://github.com/langrenjh-alt/S2AM-GO/releases/tag/v0.3.0" {
+	if releaseURL != "https://github.com/Tendo33/upstream-pilot/releases/tag/v0.3.0" {
 		t.Fatalf("release URL = %q", releaseURL)
 	}
 }
 
 func TestParseGitHubReleaseLocationRejectsUnexpectedRepository(t *testing.T) {
 	locations := []string{
-		"https://example.com/langrenjh-alt/S2AM-GO/releases/tag/v0.3.0",
+		"https://example.com/Tendo33/upstream-pilot/releases/tag/v0.3.0",
 		"https://github.com/other/project/releases/tag/v0.3.0",
-		"https://github.com/langrenjh-alt/S2AM-GO/releases/latest",
+		"https://github.com/Tendo33/upstream-pilot/releases/latest",
 	}
 	for _, location := range locations {
 		if _, _, err := parseGitHubReleaseLocation(location); err == nil {
@@ -62,7 +62,7 @@ func TestFetchLatestReleaseFromRedirect(t *testing.T) {
 		if r.Method != http.MethodHead {
 			t.Errorf("method = %s, want HEAD", r.Method)
 		}
-		w.Header().Set("Location", "https://github.com/langrenjh-alt/S2AM-GO/releases/tag/v0.3.0")
+		w.Header().Set("Location", "https://github.com/Tendo33/upstream-pilot/releases/tag/v0.3.0")
 		w.WriteHeader(http.StatusFound)
 	}))
 	defer server.Close()
@@ -73,7 +73,7 @@ func TestFetchLatestReleaseFromRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchLatestRelease() error = %v", err)
 	}
-	if tag != "v0.3.0" || releaseURL != "https://github.com/langrenjh-alt/S2AM-GO/releases/tag/v0.3.0" {
+	if tag != "v0.3.0" || releaseURL != "https://github.com/Tendo33/upstream-pilot/releases/tag/v0.3.0" {
 		t.Fatalf("fetchLatestRelease() = %q, %q", tag, releaseURL)
 	}
 }
@@ -121,7 +121,7 @@ func TestVersionStatusHandlerDoesNotAdvertiseUpstreamUpgrade(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if payload.Data.CurrentVersion == "" || payload.Data.RepositoryURL != "" || payload.Data.UpdateAvailable {
+	if payload.Data.CurrentVersion == "" || payload.Data.RepositoryURL != githubRepositoryURL || payload.Data.UpdateAvailable {
 		t.Fatalf("response did not include local version information: %#v", payload.Data)
 	}
 }

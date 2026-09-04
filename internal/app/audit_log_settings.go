@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"sub2api-upstream-manager/internal/auditlog"
+	"github.com/Tendo33/upstream-pilot/internal/auditlog"
 )
 
 const (

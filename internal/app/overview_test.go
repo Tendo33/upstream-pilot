@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"sub2api-upstream-manager/internal/auditlog"
+	"github.com/Tendo33/upstream-pilot/internal/auditlog"
 )
 
 func TestEventPageParameter(t *testing.T) {

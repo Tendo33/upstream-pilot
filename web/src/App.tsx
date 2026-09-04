@@ -24,7 +24,7 @@ type BootState =
 export default function App() {
   const [boot, setBoot] = useState<BootState>({ status: "loading" });
   const [dark, setDark] = useState(() => {
-    const stored = localStorage.getItem("s2am-theme");
+    const stored = localStorage.getItem("pilot-theme");
     return stored ? stored === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
   });
 
@@ -53,12 +53,12 @@ export default function App() {
     const sessionExpired = () => setBoot((current) => current.status === "ready" && current.initialized
       ? { status: "ready", initialized: true, user: null }
       : current);
-    window.addEventListener("s2am:session-expired", sessionExpired);
-    return () => window.removeEventListener("s2am:session-expired", sessionExpired);
+    window.addEventListener("pilot:session-expired", sessionExpired);
+    return () => window.removeEventListener("pilot:session-expired", sessionExpired);
   }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
-    localStorage.setItem("s2am-theme", dark ? "dark" : "light");
+    localStorage.setItem("pilot-theme", dark ? "dark" : "light");
     document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#000000" : "#ffffff");
   }, [dark]);
 
@@ -76,7 +76,7 @@ export default function App() {
 
   return (
     <ToastProvider>
-      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <BrowserRouter>
         <AuthenticatedApp user={boot.user} dark={dark} setDark={setDark} onSessionEnded={() => setBoot({ status: "ready", initialized: true, user: null })} />
       </BrowserRouter>
     </ToastProvider>

@@ -12,10 +12,10 @@ import (
 	"syscall"
 	"time"
 
-	"sub2api-upstream-manager/internal/app"
-	"sub2api-upstream-manager/internal/config"
-	"sub2api-upstream-manager/internal/database"
-	"sub2api-upstream-manager/internal/version"
+	"github.com/Tendo33/upstream-pilot/internal/app"
+	"github.com/Tendo33/upstream-pilot/internal/config"
+	"github.com/Tendo33/upstream-pilot/internal/database"
+	"github.com/Tendo33/upstream-pilot/internal/version"
 )
 
 func main() {
@@ -23,7 +23,7 @@ func main() {
 	migrateOnly := flag.Bool("migrate-only", false, "apply database migrations and exit")
 	flag.Parse()
 	if *showVersion {
-		fmt.Printf("Sub2API Upstream Manager %s (%s, %s)\n", version.Version, version.Commit, version.BuildTime)
+		fmt.Printf("Upstream Pilot %s (%s, %s)\n", version.Version, version.Commit, version.BuildTime)
 		return
 	}
 

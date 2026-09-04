@@ -1,81 +1,75 @@
-# Sub2API Upstream Manager
+# Upstream Pilot · 上游领航
 
-面向 Sub2API 的上游质量与成本管理工具。以 MIT 许可的 S2AM-GO 为基础，独立实现质量降级策略；Guardian 源码未引入。
+**让上游的速度、可用性与成本变化可见，并把调整落到分组。**
 
-## 已实现
+Upstream Pilot 是 Tendo33 维护的 Sub2API 上游运营控制台。它同步账号与分组，采集探测、真实请求、余额和采购倍率，生成可解释的调度建议，并在明确启用后调整优先级与容量。
 
-- 同步站点、上游账号与分组；按指定账号和模型探测。
-- 流式探测记录首字时间、总耗时、请求/实际模型和完整结束状态；中途错误、超时或截断不会判成成功。
-- 结合最近真实请求的可用性数据评估质量；接口不支持或没有数据时明确标记。真实请求接口未提供首字字段时，不用总耗时冒充首字时间。
-- 采集上游余额与采购倍率，保存价格变化；失败不覆盖为零，过期数据不用于恢复。
-- 默认仅观察。自动模式围绕人工基准降低优先级，连续健康样本加冷却控制逐级恢复。
-- 可单独启用确认失效后的停调/恢复；停调前检查各所属分组是否有同模型的近期健康备用。
-- 写回前检查远端值，发现人工修改后停止覆盖；可还原基准或保留当前值并停止接管。
-- 按分组和测试模型查看健康数、探测成功率、首字 P95；查看探测、价格、决策历史并导出 JSON。
-- 故障、恢复、低余额和价格变化事件；支持企业微信或通用 JSON Webhook，失败最多重试五次并显示投递结果。
-- 中文界面、浅色/暗色模式、桌面与手机布局；管理凭据加密存储。
+[English](README.en.md) · [使用手册](docs/OPERATIONS.md) · [部署](docs/DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [整仓审查](docs/REVIEW.md)
 
-## 运行
+> 当前为预览版本，默认只观察。已知问题与验证边界以整仓审查为准，不能将本地模拟器通过等同于生产 SLA。
 
-需要 Go 1.24+、Node.js 20+、npm 和 PostgreSQL 14+。PostgreSQL 使用独立数据库；应用自动执行迁移。
+![Upstream Pilot 本地模拟数据界面](docs/assets/quality.png)
+
+## 能做什么
+
+- **看质量**：流式首字、请求耗时、错误类型、余额、采购倍率及历史变化。
+- **排顺序**：按分组和测试模型选择价格优先、速度优先或均衡，健康候选优先于降级候选。
+- **控动作**：优先级、停调、并发上限、负载系数分别控制，发现人工修改时停止覆盖。
+- **保留证据**：独立风险、恢复确认、数据时效、待确认写回、决策历史和通知投递状态。
+- **兼容上游**：对接 Sub2API 管理接口，并支持 NewAPI 来源的成本和余额信息。
+
+请求代理、会话绑定、请求内重试与实际流量选择由 Sub2API 执行。一个账号目前配置一个探测模型；倍率监控还不是完整的模型输入、输出和缓存价格表。
+
+## 本地启动
+
+需要 **Go 1.26+、Node.js 20+ 和 PostgreSQL 14+**。
 
 ```bash
+git clone https://github.com/Tendo33/upstream-pilot.git
+cd upstream-pilot
 cp .env.example .env
-# 编辑 .env，设置数据库连接与主密钥。主密钥可用下面的命令生成：
 openssl rand -base64 32
+```
+
+编辑 `.env`，填入独立数据库的 `PILOT_DATABASE_URL`，将生成的密钥填入 `PILOT_MASTER_KEY`，然后：
+
+```bash
 make build
 ./scripts/run-local.sh .env
 ```
 
-默认访问 http://127.0.0.1:33777，首次进入创建管理员。`S2AM_*` 环境变量保留与底座的兼容性，详见 `.env.example`。应用本身不自动加载 `.env`，启动脚本负责导入。
+默认仅监听 `127.0.0.1:33777`。打开浏览器创建管理员，再添加 Sub2API 站点。主密钥用于解密保存的管理凭据，需要与数据库一起备份。
 
-主密钥用于解密保存的管理凭据，需要与数据库一起备份。生产启用 HTTPS 时设置 `S2AM_COOKIE_SECURE=true`。连接可信本机、内网或 VPN 站点时，显式设置 `S2AM_ALLOW_PRIVATE_UPSTREAMS=true`。
+## 从观察到控制
 
-## 接入与策略
+1. 添加站点并同步库存，为账号选择实际支持的模型。
+2. 配置探测和采购倍率采集，先观察足够的有效样本。
+3. 在分组策略中选择价格、速度或均衡，检查建议与冲突。
+4. 按账号显式开启自动优先级；停调与容量调整需要分别开启。
+5. 在质量页查看接管状态。还原参数和停止接管有明确入口，调度开关单独管理。
 
-1. 在「站点」添加 Sub2API 根地址和管理 API Key，执行库存同步。
-2. 在「质量」选择账号，配置实际支持的测试模型，开启定时探测；需要成本监控时开启倍率采集。
-3. 根据每个模型的表现设置首字、错误率、余额与成本阈值。默认参数是起点，需要按推理模型与实际负载校准。
-4. 先在仅观察模式确认建议；需要执行时切换到自动优先级模式。数字越大表示优先级越低。
-5. 在「质量通知」配置 Webhook 并发送测试。通用接收端收到 `event_id`、`kind`、`message`，可按 `event_id` 去重。
+采购倍率代表成本，不会随着质量规则改写用户售价。分组页的售价倍率规则是单独的手动操作。
 
-质量策略只自动修改 `priority`；调度启停是独立开关。`concurrency`、`load_factor` 和用户分组售价不会随质量规则改变。采购倍率采集记录成本，并不回写用户价格。底座的分组倍率配置保留为明确的手动操作。
-
-同账号跨组共用账号级优先级。分组健康数只代表该模型的近期探测证据，不代表备用容量、供应商独立性或用户请求 SLA。请求内超时、重试、会话绑定和安全故障切换仍由 Sub2API 负责。
-
-管理接口故障与上游故障分别记录。所有上游不可用时工具无法创造容量；系统会保留明确的未知/故障状态。
-
-## 本地模拟上游
-
-```bash
-make demo-upstream
-```
-
-模拟器仅监听 `127.0.0.1:33888`，管理 Key 为 `test-admin-key`。在控制台添加该地址，并将站点命名为「本地模拟上游（非生产）」。模拟器支持设置失败、延迟和价格，用于验证降级行为，不会连接真实供应商。
-
-## 验证
+## 验证与模拟
 
 ```bash
 make test
-# 指定可创建临时 schema 的独立测试数据库：
-SUB2UPSTREAM_TEST_DATABASE_URL='postgres://USER:PASSWORD@127.0.0.1:5432/TEST_DB?sslmode=disable' make integration
+PILOT_TEST_DATABASE_URL='postgres://USER:PASSWORD@127.0.0.1:5432/TEST_DB?sslmode=disable' make integration
+make demo-upstream
 ```
 
-数据库测试创建随机命名的临时 schema，并只清理自己创建的 schema。测试覆盖观察模式、降级与恢复、人工冲突、价格采集、通知、后台任务、API 配置、模型分组及停调备用保护。流式测试覆盖首字计时、晚到错误、截断、超时和响应大小上限。未设置测试数据库变量时，普通 Go 测试会跳过数据库用例，不能据此宣称完成集成验收。
+数据库测试创建并清理自己的随机 schema。未提供测试数据库时，集成用例会跳过。模拟器只监听本机，使用公开测试 Key `test-admin-key`，不连接真实供应商。详见 [QA 手册](qa/README.md)。
 
-## 发布与部署
+## 发布
 
 ```bash
-make release
-# ARM64 Linux：
-TARGET_ARCH=arm64 make release
+RELEASE_VERSION=0.2.0-preview.1 make release
 ```
 
-输出 `dist/upstream-manager-linux-<arch>` 和 SHA-256 文件。`deploy/upstream-manager.service` 提供独立 systemd 服务示例，详细步骤见 `docs/DEPLOYMENT.md`。
+输出 `dist/upstream-pilot-linux-amd64`、SHA-256 文件和包含许可证的压缩包。ARM64 构建使用 `TARGET_ARCH=arm64`。systemd 示例位于 `deploy/upstream-pilot.service`。
 
-## 来源与边界
+## 来源与许可证
 
-- 底座：<https://github.com/langrenjh-alt/S2AM-GO>，导入 revision `78d4aa6`。
-- 原 MIT 许可证保留在 `LICENSE`，来源与原始文档保存在 `docs/upstream/`。
-- 本项目拥有独立模块名与发布产物；不会把 S2AM-GO 的新版提示当作本项目升级。
-- 本地功能验证与生产接管是两件事。当前仓库不包含生产凭据，也不自动接管任何已有服务。
+Upstream Pilot 是**在 MIT 许可的 S2AM-GO 底座上持续改造的独立维护项目，并非完全原创重写**。认证、管理、采集与部分界面仍保留派生实现；质量引擎等扩展由本项目独立实现。没有导入 Guardian 源码。
+
+原作者署名保留在 [LICENSE](LICENSE)。[来源审计](docs/PROVENANCE.md) 和 [第三方说明](THIRD_PARTY_NOTICES.md) 说明了代码底座、第三方依赖与统计口径。

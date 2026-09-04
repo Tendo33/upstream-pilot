@@ -28,26 +28,26 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		DatabaseURL:           strings.TrimSpace(os.Getenv("S2AM_DATABASE_URL")),
-		LogDir:                env("S2AM_LOG_DIR", "./logs"),
-		ListenAddr:            env("S2AM_LISTEN_ADDR", ":33777"),
-		PublicURL:             strings.TrimRight(env("S2AM_PUBLIC_URL", "http://127.0.0.1:33777"), "/"),
-		CookieSecure:          envBool("S2AM_COOKIE_SECURE", false),
-		AutoMigrate:           envBool("S2AM_AUTO_MIGRATE", true),
-		Workers:               envInt("S2AM_WORKERS", 8),
-		AllowPrivateUpstreams: envBool("S2AM_ALLOW_PRIVATE_UPSTREAMS", false),
+		DatabaseURL:           strings.TrimSpace(os.Getenv("PILOT_DATABASE_URL")),
+		LogDir:                env("PILOT_LOG_DIR", "./logs"),
+		ListenAddr:            env("PILOT_LISTEN_ADDR", "127.0.0.1:33777"),
+		PublicURL:             strings.TrimRight(env("PILOT_PUBLIC_URL", "http://127.0.0.1:33777"), "/"),
+		CookieSecure:          envBool("PILOT_COOKIE_SECURE", false),
+		AutoMigrate:           envBool("PILOT_AUTO_MIGRATE", true),
+		Workers:               envInt("PILOT_WORKERS", 8),
+		AllowPrivateUpstreams: envBool("PILOT_ALLOW_PRIVATE_UPSTREAMS", false),
 		SessionTTL:            30 * 24 * time.Hour,
 	}
 	if cfg.DatabaseURL == "" {
-		return Config{}, errors.New("S2AM_DATABASE_URL is required")
+		return Config{}, errors.New("PILOT_DATABASE_URL is required")
 	}
 	if cfg.Workers < 1 || cfg.Workers > 128 {
-		return Config{}, errors.New("S2AM_WORKERS must be between 1 and 128")
+		return Config{}, errors.New("PILOT_WORKERS must be between 1 and 128")
 	}
 	if _, err := url.ParseRequestURI(cfg.PublicURL); err != nil {
-		return Config{}, fmt.Errorf("invalid S2AM_PUBLIC_URL: %w", err)
+		return Config{}, fmt.Errorf("invalid PILOT_PUBLIC_URL: %w", err)
 	}
-	key, err := parseMasterKey(os.Getenv("S2AM_MASTER_KEY"))
+	key, err := parseMasterKey(os.Getenv("PILOT_MASTER_KEY"))
 	if err != nil {
 		return Config{}, err
 	}
@@ -58,7 +58,7 @@ func Load() (Config, error) {
 func parseMasterKey(raw string) ([]byte, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil, errors.New("S2AM_MASTER_KEY is required; generate one with: openssl rand -base64 32")
+		return nil, errors.New("PILOT_MASTER_KEY is required; generate one with: openssl rand -base64 32")
 	}
 	for _, decode := range []func(string) ([]byte, error){base64.StdEncoding.DecodeString, hex.DecodeString} {
 		if value, err := decode(raw); err == nil && len(value) == 32 {
@@ -66,7 +66,7 @@ func parseMasterKey(raw string) ([]byte, error) {
 		}
 	}
 	// A literal passphrase is deliberately rejected instead of silently using a weak key.
-	return nil, errors.New("S2AM_MASTER_KEY must encode exactly 32 bytes as base64 or hex")
+	return nil, errors.New("PILOT_MASTER_KEY must encode exactly 32 bytes as base64 or hex")
 }
 
 func KeyFingerprint(key []byte) string {

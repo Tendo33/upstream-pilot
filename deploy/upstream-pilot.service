@@ -1,0 +1,26 @@
+[Unit]
+Description=Upstream Pilot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=upstream-pilot
+Group=upstream-pilot
+WorkingDirectory=/opt/upstream-pilot
+EnvironmentFile=/etc/upstream-pilot.env
+Environment=PILOT_LOG_DIR=/var/lib/upstream-pilot/logs
+ExecStart=/opt/upstream-pilot/upstream-pilot
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+StateDirectory=upstream-pilot
+ReadWritePaths=/var/lib/upstream-pilot
+
+[Install]
+WantedBy=multi-user.target

@@ -74,14 +74,14 @@ func TestSendWeComWebhookRejectsAPIError(t *testing.T) {
 func TestBuildWeComBalanceAlertMessage(t *testing.T) {
 	message := buildWeComBalanceAlertMessage(10, []lowBalanceAccount{
 		{SiteName: "主站", AccountName: "账号 *A*", Remaining: 1.25, Unit: "USD"},
-	}, time.Date(2026, 7, 28, 1, 2, 3, 0, time.UTC), "https://s2am.example")
+	}, time.Date(2026, 7, 28, 1, 2, 3, 0, time.UTC), "https://pilot.example")
 
 	for _, expected := range []string{
-		"## S2AM-GO 余额预警",
+		"## Upstream Pilot 余额预警",
 		"预警阈值：<font color=\"warning\">10</font>",
 		"主站 / 账号 \\*A\\*",
 		"1.25 USD",
-		"[打开账号页面](https://s2am.example/accounts)",
+		"[打开账号页面](https://pilot.example/accounts)",
 	} {
 		if !strings.Contains(message, expected) {
 			t.Errorf("message missing %q:\n%s", expected, message)

@@ -12,25 +12,30 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/Tendo33/upstream-pilot/internal/config"
+	"github.com/Tendo33/upstream-pilot/internal/database"
+	"github.com/Tendo33/upstream-pilot/internal/quality"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"sub2api-upstream-manager/internal/config"
-	"sub2api-upstream-manager/internal/database"
-	"sub2api-upstream-manager/internal/quality"
 )
 
 type qualityTestRemote struct {
-	mu            sync.Mutex
-	priority      int
-	rate          float64
-	success       bool
-	schedulable   bool
-	writes        []map[string]any
-	notifications int
-	rejectWrites  bool
-	adminDenied   bool
+	mu             sync.Mutex
+	priority       int
+	loadFactor     int
+	concurrency    int
+	backupPriority int
+	backupDelayMS  int
+	rate           float64
+	success        bool
+	schedulable    bool
+	writes         []map[string]any
+	notifications  int
+	rejectWrites   bool
+	adminDenied    bool
 }
 
 func (s *qualityTestRemote) serve(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +44,15 @@ func (s *qualityTestRemote) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	send := func(v any) { _ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": v}) }
 	switch {
+	case r.URL.Path == "/v1/chat/completions":
+		id := 7
+		if s.backupPriority < s.priority {
+			id = 8
+		}
+		if id == 7 && !s.success {
+			w.WriteHeader(503)
+		}
+		send(map[string]any{"upstream_account_id": id})
 	case r.URL.Path == "/notify":
 		s.notifications++
 		w.WriteHeader(204)
@@ -64,6 +78,11 @@ func (s *qualityTestRemote) serve(w http.ResponseWriter, r *http.Request) {
 		s.writes = append(s.writes, data)
 		s.schedulable = data["schedulable"] == true
 		send(map[string]any{"id": 7, "schedulable": s.schedulable, "priority": s.priority})
+	case strings.HasSuffix(r.URL.Path, "/accounts/8"):
+		if s.backupDelayMS > 0 {
+			time.Sleep(time.Duration(s.backupDelayMS) * time.Millisecond)
+		}
+		send(map[string]any{"id": 8, "priority": s.backupPriority, "status": "active", "schedulable": true})
 	case strings.HasSuffix(r.URL.Path, "/accounts/7"):
 		if r.Method == http.MethodPut {
 			var data map[string]any
@@ -73,11 +92,17 @@ func (s *qualityTestRemote) serve(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(503)
 				return
 			}
+			if value, ok := data["load_factor"].(float64); ok {
+				s.loadFactor = int(value)
+			}
+			if value, ok := data["concurrency"].(float64); ok {
+				s.concurrency = int(value)
+			}
 			if value, ok := data["priority"].(float64); ok {
 				s.priority = int(value)
 			}
 		}
-		send(map[string]any{"id": 7, "priority": s.priority, "rate_multiplier": 1.0, "schedulable": s.schedulable, "status": "active"})
+		send(map[string]any{"id": 7, "load_factor": s.loadFactor, "concurrency": s.concurrency, "priority": s.priority, "rate_multiplier": 1.0, "schedulable": s.schedulable, "status": "active"})
 	default:
 		http.NotFound(w, r)
 	}
@@ -85,9 +110,9 @@ func (s *qualityTestRemote) serve(w http.ResponseWriter, r *http.Request) {
 
 func newQualityIntegration(t *testing.T) (*App, AccountWork, *qualityTestRemote, string) {
 	t.Helper()
-	dsn := os.Getenv("SUB2UPSTREAM_TEST_DATABASE_URL")
+	dsn := os.Getenv("PILOT_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("set SUB2UPSTREAM_TEST_DATABASE_URL to run PostgreSQL integration tests")
+		t.Skip("set PILOT_TEST_DATABASE_URL to run PostgreSQL integration tests")
 	}
 	ctx := context.Background()
 	base, err := pgxpool.New(ctx, dsn)
@@ -120,7 +145,7 @@ func newQualityIntegration(t *testing.T) (*App, AccountWork, *qualityTestRemote,
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := &qualityTestRemote{priority: 20, rate: 1, success: false, schedulable: true}
+	remote := &qualityTestRemote{priority: 20, rate: 1, success: false, schedulable: true, loadFactor: 16, concurrency: 8, backupPriority: 20}
 	server := httptest.NewServer(http.HandlerFunc(remote.serve))
 	t.Cleanup(server.Close)
 	owner, site, id := uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -315,6 +340,13 @@ func TestQualitySchedulerCollectsWithoutRemoteWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if task.Kind == "traffic" {
+		scheduler.execute(ctx, task)
+		task, err = scheduler.claim(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	if task.Kind != "probe" {
 		t.Fatalf("task=%+v", task)
 	}
@@ -500,6 +532,8 @@ func TestQualityPauseRequiresIndependentSwitchAndHealthyModelBackup(t *testing.T
 	if _, err := a.db.Exec(ctx, `UPDATE upstream_accounts SET probe_model='test-model' WHERE id=$1`, other); err != nil {
 		t.Fatal(err)
 	}
+	// A cached healthy label alone is insufficient; seed genuine recent evidence.
+	seedEngineSamples(t, a, w, other, 5, true, 100, 0)
 	if _, err := a.evaluateQuality(ctx, w, w.OwnerID); err != nil {
 		t.Fatal(err)
 	}

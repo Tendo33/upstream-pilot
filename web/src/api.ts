@@ -41,7 +41,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
   if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
-    const csrf = readCookie("s2am_csrf");
+    const csrf = readCookie("pilot_csrf");
     if (csrf) headers.set("X-CSRF-Token", csrf);
   }
 
@@ -61,7 +61,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const payload = (await response.json().catch(() => ({}))) as DataEnvelope<T> & ErrorEnvelope;
   if (!response.ok) {
     if (response.status === 401 && path !== "/auth/login") {
-      window.dispatchEvent(new Event("s2am:session-expired"));
+      window.dispatchEvent(new Event("pilot:session-expired"));
     }
     throw new APIError(
       response.status,

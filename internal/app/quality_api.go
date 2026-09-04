@@ -7,27 +7,33 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Tendo33/upstream-pilot/internal/quality"
+	"github.com/Tendo33/upstream-pilot/internal/upstream"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"sub2api-upstream-manager/internal/quality"
-	"sub2api-upstream-manager/internal/upstream"
 )
 
 type qualityAccountView struct {
-	Account        Account                  `json:"account"`
-	Policy         quality.Policy           `json:"policy"`
-	State          quality.State            `json:"state"`
-	P95            *int                     `json:"first_content_p95_ms"`
-	Samples        int                      `json:"sample_count"`
-	SuccessPercent *float64                 `json:"success_percent"`
-	Balance        *float64                 `json:"balance"`
-	BalanceUnit    string                   `json:"balance_unit"`
-	BalanceAt      *time.Time               `json:"balance_at"`
-	BalanceFresh   bool                     `json:"balance_fresh"`
-	Rate           *float64                 `json:"cost_rate"`
-	RateFresh      bool                     `json:"cost_fresh"`
-	Traffic        *upstream.TrafficSummary `json:"traffic"`
-	TrafficAt      *time.Time               `json:"traffic_at"`
+	HasManagedControls bool                     `json:"has_managed_controls"`
+	HasPendingControls bool                     `json:"has_pending_controls"`
+	SortingLatency     *int                     `json:"sorting_latency_ms"`
+	LatencySource      string                   `json:"latency_source"`
+	Eligible           bool                     `json:"eligible"`
+	ReferenceRate      *float64                 `json:"reference_rate"`
+	Account            Account                  `json:"account"`
+	Policy             quality.Policy           `json:"policy"`
+	State              quality.State            `json:"state"`
+	P95                *int                     `json:"first_content_p95_ms"`
+	Samples            int                      `json:"sample_count"`
+	SuccessPercent     *float64                 `json:"success_percent"`
+	Balance            *float64                 `json:"balance"`
+	BalanceUnit        string                   `json:"balance_unit"`
+	BalanceAt          *time.Time               `json:"balance_at"`
+	BalanceFresh       bool                     `json:"balance_fresh"`
+	Rate               *float64                 `json:"cost_rate"`
+	RateFresh          bool                     `json:"cost_fresh"`
+	Traffic            *upstream.TrafficSummary `json:"traffic"`
+	TrafficAt          *time.Time               `json:"traffic_at"`
 }
 
 func (a *App) qualityListHandler(w http.ResponseWriter, r *http.Request) error {
@@ -96,9 +102,11 @@ func (a *App) qualityView(ctx context.Context, id, owner string) (qualityAccount
 		return v, err
 	}
 	// Read-only views never create or advance control state.
-	v.State = quality.State{Baseline: work.Priority, Desired: work.Priority, Status: "unknown", Reason: "等待探测"}
-	err = a.db.QueryRow(ctx, `SELECT baseline_priority,last_applied_priority,desired_priority,tier,recovery_streak,last_sample_at,last_changed_at,status,reason,conflict,owned_pause FROM quality_states WHERE account_id=$1`, id).Scan(&v.State.Baseline, &v.State.LastApplied, &v.State.Desired, &v.State.Tier, &v.State.RecoveryStreak, &v.State.LastSampleAt, &v.State.LastChangedAt, &v.State.Status, &v.State.Reason, &v.State.Conflict, &v.State.OwnedPause)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	v.State, _, err = a.readQualityState(ctx, work)
+	if err != nil {
+		return v, err
+	}
+	if err = a.db.QueryRow(ctx, `SELECT COALESCE((SELECT last_applied_priority IS NOT NULL OR owned_pause OR applied_control<>'{}'::jsonb FROM quality_states WHERE account_id=$1),false),COALESCE((SELECT pending_priority IS NOT NULL OR COALESCE(pending_control->'to','{}'::jsonb)<>'{}'::jsonb FROM quality_states WHERE account_id=$1),false)`, id).Scan(&v.HasManagedControls, &v.HasPendingControls); err != nil {
 		return v, err
 	}
 	snapshot, err := a.qualitySnapshot(ctx, work, v.Policy)
@@ -107,12 +115,18 @@ func (a *App) qualityView(ctx context.Context, id, owner string) (qualityAccount
 	}
 	decision := quality.Evaluate(v.Policy, v.State, snapshot, time.Now().UTC())
 	v.P95 = decision.P95
+	v.SortingLatency = decision.SortingLatency
+	v.LatencySource = decision.LatencySource
 	v.Samples = decision.Count
 	v.SuccessPercent = decision.SuccessPercent
-	if decision.State.Status == "unknown" {
-		v.State.Status = "unknown"
-		v.State.Reason = decision.State.Reason
-	}
+	v.Eligible = decision.Eligible && !v.State.Conflict && v.State.PlanError == "" && work.RemoteStatus == "active" && work.Schedulable
+	// Current evidence is shown separately from the last committed decision time.
+	evaluated := v.State.EvaluatedAt
+	desired := v.State.Desired
+	v.State = decision.State
+	v.State.EvaluatedAt = evaluated
+	v.State.Desired = desired
+	v.ReferenceRate = snapshot.ReferenceRate
 	v.Balance = snapshot.Balance
 	v.BalanceFresh = snapshot.BalanceFresh
 	v.Rate = snapshot.Rate
@@ -180,8 +194,14 @@ func (a *App) qualityPolicyHandler(w http.ResponseWriter, r *http.Request) error
 		if err != nil {
 			return err
 		}
+		if _, err = tx.Exec(r.Context(), `UPDATE upstream_accounts SET config_generation=config_generation+1 WHERE id=$1`, id); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(r.Context(), `UPDATE sites SET next_reconcile_at=LEAST(next_reconcile_at,now()) WHERE id=(SELECT site_id FROM upstream_accounts WHERE id=$1)`, id); err != nil {
+			return err
+		}
 		if m := input.Monitoring; m != nil {
-			_, err = tx.Exec(r.Context(), `UPDATE upstream_accounts SET health_enabled=$2,probe_model=NULLIF($3,''),probe_interval_seconds=$4,probe_timeout_seconds=$5,rate_sync_enabled=$6,next_probe_at=now(),next_rate_sync_at=now(),updated_at=now() WHERE id=$1`, id, m.Enabled, m.Model, m.Interval, m.Timeout, m.CollectRate)
+			_, err = tx.Exec(r.Context(), `UPDATE upstream_accounts SET health_enabled=$2,probe_model=NULLIF($3,''),probe_interval_seconds=$4,probe_timeout_seconds=$5,rate_sync_enabled=$6,next_probe_at=now(),next_rate_sync_at=now(),config_generation=config_generation+1,updated_at=now() WHERE id=$1`, id, m.Enabled, m.Model, m.Interval, m.Timeout, m.CollectRate)
 			if err != nil {
 				return err
 			}
@@ -243,6 +263,16 @@ func (a *App) qualityReleaseHandler(w http.ResponseWriter, r *http.Request) erro
 		if err != nil {
 			return err
 		}
+		// Stop scheduling durably before restoration. If the RPC fails, the
+		// background engine cannot undo the operator's interrupted release.
+		p.Mode = "observe"
+		p.AutoPause = false
+		p.AutoLoadFactor = false
+		p.AutoConcurrency = false
+		stopped, _ := json.Marshal(p)
+		if _, err = a.db.Exec(ctx, `INSERT INTO quality_policies(account_id,config) VALUES($1,$2) ON CONFLICT(account_id) DO UPDATE SET config=excluded.config,updated_at=now()`, id, stopped); err != nil {
+			return err
+		}
 		client, err := a.clientForWork(work)
 		if err != nil {
 			return err
@@ -251,30 +281,19 @@ func (a *App) qualityReleaseHandler(w http.ResponseWriter, r *http.Request) erro
 		if err != nil {
 			return err
 		}
+		_ = pending
 		if input.Restore {
-			expected := state.Baseline
-			if state.LastApplied != nil {
-				expected = *state.LastApplied
-			}
-			if pending != nil && remote.Priority == *pending {
-				expected = *pending
-			}
-			if remote.Priority != expected {
-				return &apiError{Status: 409, Code: "MANUAL_CHANGE", Message: "优先级已被外部修改，请选择保留当前值并停止接管"}
-			}
-			if remote.Priority != state.Baseline {
-				remote, err = client.UpdateAccount(ctx, work.RemoteID, upstream.AccountUpdate{Priority: &state.Baseline})
-				if err != nil {
-					return err
-				}
-				if remote.Priority != state.Baseline {
-					return errors.New("上游未恢复基准优先级")
-				}
+			remote, err = a.restoreEngineControls(ctx, work, state, client, remote)
+			if err != nil {
+				return err
 			}
 		}
+
 		// Releasing never enables an account: scheduling has a separate manual action.
 		p.Mode = "observe"
 		p.AutoPause = false
+		p.AutoLoadFactor = false
+		p.AutoConcurrency = false
 		raw, _ := json.Marshal(p)
 		tx, err := a.db.Begin(ctx)
 		if err != nil {
@@ -285,11 +304,11 @@ func (a *App) qualityReleaseHandler(w http.ResponseWriter, r *http.Request) erro
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE quality_states SET baseline_priority=$2,desired_priority=$2,last_applied_priority=NULL,pending_priority=NULL,conflict=false,tier=0,recovery_streak=0,owned_pause=false,status='unknown',reason='已停止接管，当前优先级作为新基准',evaluated_at=now() WHERE account_id=$1`, id, remote.Priority)
+		_, err = tx.Exec(ctx, `UPDATE quality_states SET baseline_priority=$2,desired_priority=$2,last_applied_priority=NULL,pending_priority=NULL,conflict=false,tier=0,recovery_streak=0,owned_pause=false,risks='[]',plan_error='',baseline_control='{}',applied_control='{}',pending_control='{}',status='unknown',reason='已停止接管，当前优先级作为新基准',evaluated_at=now() WHERE account_id=$1`, id, remote.Priority)
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE upstream_accounts SET priority=$2,managed_hold=false WHERE id=$1`, id, remote.Priority)
+		_, err = tx.Exec(ctx, `UPDATE upstream_accounts SET priority=$2,managed_hold=false,config_generation=config_generation+1 WHERE id=$1`, id, remote.Priority)
 		if err != nil {
 			return err
 		}
@@ -382,6 +401,5 @@ func (a *App) qualityGroupHandler(w http.ResponseWriter, r *http.Request) error 
 	if err != nil {
 		return err
 	}
-	writeData(w, 200, json.RawMessage(raw))
-	return nil
+	return a.writeEngineGroups(w, r, raw)
 }

@@ -110,8 +110,8 @@ export function OverviewPage() {
       <section className="metric-grid" aria-label="关键指标">
         <Metric label="站点" value={overview.sites} note={`${connected} 个连接正常`} icon={<Server size={18} />} />
         <Metric label="账号" value={overview.accounts} note={`${overview.automated} 个已启用自动化`} icon={<Database size={18} />} />
-        <Metric label="运行健康" value={overview.healthy} note={`${overview.failing} 个探测异常`} icon={<CheckCircle2 size={18} />} tone={overview.failing ? "warning" : "success"} />
-        <Metric label="近 24 小时失败" value={overview.recent_failures} note={`${overview.paused} 个已暂停调度`} icon={<ShieldAlert size={18} />} tone={overview.recent_failures ? "danger" : "neutral"} />
+        <Metric label="最近探测成功" value={overview.healthy} note={`${overview.failing} 个探测异常`} icon={<CheckCircle2 size={18} />} tone={overview.failing ? "warning" : "success"} />
+        <Metric label="近 24 小时失败" value={overview.recent_failures} note={`${overview.paused} 个历史暂停状态`} icon={<ShieldAlert size={18} />} tone={overview.recent_failures ? "danger" : "neutral"} />
       </section>
 
       {overview.sites === 0 ? (

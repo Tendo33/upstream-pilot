@@ -15,7 +15,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5"
 
-	webassets "sub2api-upstream-manager/internal/web"
+	webassets "github.com/Tendo33/upstream-pilot/internal/web"
 )
 
 type contextKey string
@@ -63,6 +63,8 @@ func (a *App) Router() http.Handler {
 			protected.Get("/overview", a.wrap(a.overview))
 			protected.Get("/quality", a.wrap(a.qualityListHandler))
 			protected.Get("/quality/groups", a.wrap(a.qualityGroupHandler))
+			protected.Put("/quality/groups/{groupID}/policy", a.wrap(a.engineGroupPolicyHandler))
+			protected.Post("/quality/{accountID}/reference", a.wrap(a.engineReferenceHandler))
 			protected.Get("/quality/alerts", a.wrap(a.qualityAlertsHandler))
 			protected.Put("/quality/alerts", a.wrap(a.qualityAlertsHandler))
 			protected.Post("/quality/alerts/test", a.wrap(a.qualityAlertTestHandler))

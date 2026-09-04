@@ -122,6 +122,7 @@ type SiteSecret struct {
 }
 
 type AccountWork struct {
+	ConfigGeneration int64
 	Account
 	OwnerID                    string
 	SiteBaseURL                string

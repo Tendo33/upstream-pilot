@@ -1,7 +1,7 @@
-# Product
+# Product contract
 
-Sub2API Upstream Manager is Simon's personal operations console for a relay whose accounts all connect to external suppliers. Operators need to see first-content latency, errors, balance and cost changes, and preserve a stable user-facing group through priority demotion and recovery.
+Upstream Pilot helps operators manage Sub2API accounts backed by external suppliers. Its primary workflow is evidence collection, quality assessment, group/model planning, explicit control and auditable recovery.
 
-The agreed default is observation. Priority automation is explicit and pausing is independent. Do not silently change capacities or user prices. Preserve manual configuration and show evidence age and reasons for every action.
+The default is observation. Priority, scheduling and capacity controls are independently enabled. Procurement costs and user-facing prices are different concepts. Unknown evidence must remain unknown. Manual ownership, source identity and recovery evidence must be preserved.
 
-The existing S2AM-GO interface is the visual starting point. Extend its restrained, compact, Chinese operations UI. No visual redesign or new branding exercise is required. This context is drawn from the user's explicit discussion.
+The product name is Upstream Pilot, the repository and executable are `upstream-pilot`, and public configuration uses the `PILOT_` prefix. Historical compatibility migrations may reference prior identifiers solely to preserve stored data. Third-party authorship must remain accurately attributed.

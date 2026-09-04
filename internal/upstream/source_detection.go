@@ -112,7 +112,7 @@ func ProbeNewAPISource(ctx context.Context, rawURL string, client *http.Client) 
 		return false
 	}
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("User-Agent", "S2AM-GO/source-detection")
+	request.Header.Set("User-Agent", "UpstreamPilot/source-detection")
 	response, err := defaultHTTPClient(client).Do(request)
 	if err != nil {
 		return false

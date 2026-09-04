@@ -13,13 +13,13 @@ import (
 
 	"golang.org/x/mod/semver"
 
-	buildversion "sub2api-upstream-manager/internal/version"
+	buildversion "github.com/Tendo33/upstream-pilot/internal/version"
 )
 
 const (
-	githubRepositoryURL = "https://github.com/langrenjh-alt/S2AM-GO"
+	githubRepositoryURL = "https://github.com/Tendo33/upstream-pilot"
 	githubLatestURL     = githubRepositoryURL + "/releases/latest"
-	githubReleasePrefix = "/langrenjh-alt/S2AM-GO/releases/tag/"
+	githubReleasePrefix = "/Tendo33/upstream-pilot/releases/tag/"
 	versionCheckTimeout = 8 * time.Second
 	versionSuccessTTL   = 6 * time.Hour
 	versionFailureTTL   = 10 * time.Minute
@@ -55,9 +55,8 @@ func newVersionChecker(client *http.Client) *versionChecker {
 }
 
 func (a *App) versionStatusHandler(w http.ResponseWriter, r *http.Request) error {
-	// This fork has no remote release source yet; never advertise upstream
-	// S2AM releases as upgrades for this application's independently changed code.
-	writeData(w, http.StatusOK, versionStatus{CurrentVersion: buildversion.Version, Commit: buildversion.Commit, BuildTime: buildversion.BuildTime, CheckedAt: time.Now().UTC()})
+	// Release metadata always refers to this project.
+	writeData(w, http.StatusOK, versionStatus{CurrentVersion: buildversion.Version, RepositoryURL: githubRepositoryURL, Commit: buildversion.Commit, BuildTime: buildversion.BuildTime, CheckedAt: time.Now().UTC()})
 	return nil
 }
 
@@ -107,7 +106,7 @@ func fetchLatestRelease(ctx context.Context, client *http.Client, latestURL stri
 		return "", "", fmt.Errorf("create GitHub release request: %w", err)
 	}
 	request.Header.Set("Accept", "text/html")
-	request.Header.Set("User-Agent", "S2AM-GO/"+strings.TrimSpace(buildversion.Version))
+	request.Header.Set("User-Agent", "Upstream Pilot/"+strings.TrimSpace(buildversion.Version))
 
 	response, err := client.Do(request)
 	if err != nil {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"sub2api-upstream-manager/internal/auditlog"
+	"github.com/Tendo33/upstream-pilot/internal/auditlog"
 )
 
 func (a *App) overview(w http.ResponseWriter, r *http.Request) error {

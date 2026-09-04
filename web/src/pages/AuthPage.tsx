@@ -40,12 +40,12 @@ export function AuthPage({ initialized, submit }: AuthPageProps) {
   return (
     <main className="auth-page">
       <header className="auth-brand">
-        <span className="brand-mark"><span /></span>
-        <span className="brand-name">Upstream<span> Manager</span></span>
+        <img className="pilot-mark" src="/favicon.svg" alt="" />
+        <span className="brand-name">Upstream<span> Pilot</span></span>
       </header>
       <section className="auth-panel">
         <div className="auth-icon"><ShieldCheck size={21} /></div>
-        <h1>{initialized ? "登录控制台" : "初始化 Upstream Manager"}</h1>
+        <h1>{initialized ? "登录控制台" : "初始化 Upstream Pilot"}</h1>
         <p>{initialized ? "使用你的工作区账号继续" : "创建首个管理员账号"}</p>
         <form onSubmit={onSubmit} className="auth-form">
           <Field label="邮箱" required>

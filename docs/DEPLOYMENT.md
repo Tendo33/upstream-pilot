@@ -1,17 +1,34 @@
-# Deployment
+# 部署 Upstream Pilot
 
-Build with `make release`. Use a dedicated PostgreSQL database and keep its backup plus the master key and audit-log directory. The application needs schema migration privileges in its own database.
+## 配置
 
-The example service uses `/opt/upstream-manager/upstream-manager`, `/etc/upstream-manager.env`, and `/var/lib/upstream-manager/logs`.
+从 `.env.example` 复制配置，至少设置：
 
-On the chosen Linux host, create the service identity and directories, install the executable matching its architecture, and copy `deploy/upstream-manager.service` to the systemd unit directory. Configure the environment file from `.env.example`; restrict its permissions to the service identity. Set `S2AM_LISTEN_ADDR=127.0.0.1:33777` behind an HTTPS reverse proxy and `S2AM_COOKIE_SECURE=true`.
+| 变量 | 用途 |
+| --- | --- |
+| `PILOT_DATABASE_URL` | 独立 PostgreSQL 数据库 |
+| `PILOT_MASTER_KEY` | Base64 编码的 32 字节加密主密钥 |
+| `PILOT_LISTEN_ADDR` | 默认 `127.0.0.1:33777` |
+| `PILOT_PUBLIC_URL` | 用户访问地址 |
+| `PILOT_COOKIE_SECURE` | HTTPS 部署设为 `true` |
+| `PILOT_LOG_DIR` | 可写审计目录 |
+| `PILOT_WORKERS` | 后台并发任务数量，默认 8 |
+| `PILOT_ALLOW_PRIVATE_UPSTREAMS` | 是否允许连接可信内网，默认关闭 |
 
-The application applies ordered PostgreSQL migrations on startup. `--migrate-only` applies migrations and exits; `--version` prints build identity. Start the service after the environment, database and executable are ready.
+## systemd
 
-Verify `/healthz` (process), `/readyz` (database), then login and synchronize a test Sub2API site. Both endpoints being healthy do not prove upstream availability. Configure the intended account/model probe and leave policy in observation until its proposed changes match expectations.
+为服务创建 `upstream-pilot` 用户和组，将解压后的可执行文件安装为 `/opt/upstream-pilot/upstream-pilot`，配置文件放入 `/etc/upstream-pilot.env` 并限制为服务身份可读。复制 `deploy/upstream-pilot.service` 后执行：
 
-Do not operate another automatic writer of the same account priority alongside this service. Review session affinity and retry behavior in the deployed Sub2API version before relying on priority changes for user-visible failover. Stop account takeover from the UI before retiring this service; the two release actions distinguish restoring the owned baseline from preserving a manual remote change.
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now upstream-pilot
+sudo systemctl status upstream-pilot
+```
 
-For rollback, retain the prior binary and take a database backup before upgrade. Do not point an older binary at a newly migrated database without verifying schema compatibility.
+先在受信任的本地连接中初始化管理员，再通过 HTTPS 反向代理提供访问。健康端点是 `/healthz` 和 `/readyz`；它们仅证明进程和数据库可达，不证明上游可用。
 
-This repository supplies deployable artifacts and a service template; running a production rollout is separate from local development acceptance.
+## 升级与回滚
+
+升级前备份数据库、主密钥和审计日志；保留旧二进制。应用启动会执行尚未应用的迁移。检查目标版本、数据库迁移、健康端点、实际界面和代表性请求。存在迁移时，回滚不能只替换可执行文件，应先核对旧版本的数据库兼容性。
+
+此前本地开发版本的配置前缀和可执行文件名已统一为 `PILOT_` 与 `upstream-pilot`；请更新启动环境并重新登录。身份迁移仅转换旧密码哈希标识，bcrypt 内容和密码材料不变。数据库与加密主密钥必须原样保留。

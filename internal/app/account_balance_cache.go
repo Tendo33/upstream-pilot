@@ -15,7 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"sub2api-upstream-manager/internal/upstream"
+	"github.com/Tendo33/upstream-pilot/internal/upstream"
 )
 
 const (

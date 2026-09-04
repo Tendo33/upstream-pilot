@@ -3,9 +3,9 @@ package config
 import "testing"
 
 func TestLogDirectoryConfiguration(t *testing.T) {
-	t.Setenv("S2AM_DATABASE_URL", "postgres://localhost/s2am")
-	t.Setenv("S2AM_MASTER_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
-	t.Setenv("S2AM_LOG_DIR", "")
+	t.Setenv("PILOT_DATABASE_URL", "postgres://localhost/pilot")
+	t.Setenv("PILOT_MASTER_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	t.Setenv("PILOT_LOG_DIR", "")
 	defaultConfig, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -14,12 +14,12 @@ func TestLogDirectoryConfiguration(t *testing.T) {
 		t.Fatalf("default log directory = %q", defaultConfig.LogDir)
 	}
 
-	t.Setenv("S2AM_LOG_DIR", "  /var/lib/s2am-go/logs  ")
+	t.Setenv("PILOT_LOG_DIR", "  /var/lib/upstream-pilot/logs  ")
 	configured, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if configured.LogDir != "/var/lib/s2am-go/logs" {
+	if configured.LogDir != "/var/lib/upstream-pilot/logs" {
 		t.Fatalf("configured log directory = %q", configured.LogDir)
 	}
 }

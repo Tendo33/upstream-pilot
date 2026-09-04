@@ -1,3 +1,5 @@
-# Interface conventions
+# Interface guidelines
 
-Mode: Operate. Inherit S2AM-GO's Geist sans-serif typography, neutral light/dark surfaces, existing buttons and form fields. Use semantic status colors with text labels. New quality views use compact tables on desktop and stacked rows on mobile. Settings appear in a dedicated section with labelled inputs. Empty, stale, unsupported, loading and failed states must remain distinct. Never display synthetic samples as production data.
+Upstream Pilot is an operations console. Use compact information hierarchy, readable Chinese labels, light/dark themes and accessible controls. Severity must have a text label as well as color. Explain the source and age of evidence, distinguish recommendations from applied values, and expose recovery for every managed field.
+
+Use the project's three-input upward-arrow mark and Upstream Pilot name. The mark represents several upstreams feeding one scheduling decision. Existing Geist fonts and Lucide icons are third-party dependencies, not original artwork claims. Documentation screenshots must be generated from this application with synthetic data.

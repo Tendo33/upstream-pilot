@@ -82,7 +82,10 @@ func (a *App) updateAccountScheduling(w http.ResponseWriter, r *http.Request) er
 		if command.RowsAffected() == 0 {
 			return fmt.Errorf("account disappeared while updating scheduling")
 		}
-		_, updateErr = a.db.Exec(requestCtx, `UPDATE quality_states SET owned_pause=false WHERE account_id=$1`, accountID)
+		if _, updateErr = a.db.Exec(requestCtx, `UPDATE quality_policies SET config=jsonb_set(config,'{auto_pause}','false'),updated_at=now() WHERE account_id=$1`, accountID); updateErr != nil {
+			return updateErr
+		}
+		_, updateErr = a.db.Exec(requestCtx, `UPDATE quality_states SET owned_pause=false,baseline_control=baseline_control-'schedulable',applied_control=applied_control-'schedulable',pending_control=jsonb_set(jsonb_set(pending_control,'{from}',COALESCE(pending_control->'from','{}')-'schedulable'),'{to}',COALESCE(pending_control->'to','{}')-'schedulable') WHERE account_id=$1`, accountID)
 		return updateErr
 	})
 	if err != nil {
@@ -158,6 +161,14 @@ func (c *pgxAccountSchedulingLockConnection) Discard(ctx context.Context) error 
 }
 
 func (a *App) withAccountSchedulingLock(ctx context.Context, accountID string, operation func(*pgxpool.Conn) error) error {
+	var site string
+	if err := a.db.QueryRow(ctx, `SELECT site_id::text FROM upstream_accounts WHERE id=$1`, accountID).Scan(&site); err != nil {
+		return err
+	}
+	return a.withSiteSchedulingLock(ctx, site, operation)
+}
+
+func (a *App) withSiteSchedulingLock(ctx context.Context, siteID string, operation func(*pgxpool.Conn) error) error {
 	// Reserve pool headroom for queries performed while a session lock is held.
 	if a.controlSlots != nil {
 		select {
@@ -167,7 +178,7 @@ func (a *App) withAccountSchedulingLock(ctx context.Context, accountID string, o
 			return ctx.Err()
 		}
 	}
-	first, second, err := accountSchedulingLockKeys(accountID)
+	first, second, err := accountSchedulingLockKeys(siteID)
 	if err != nil {
 		return err
 	}

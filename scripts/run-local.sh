@@ -10,4 +10,4 @@ fi
 set -a
 source "$task_env"
 set +a
-exec ./bin/upstream-manager
+exec ./bin/upstream-pilot

@@ -47,6 +47,8 @@ type Sub2AccountGroup struct {
 }
 
 type Sub2Account struct {
+	LoadFactor                               *int               `json:"load_factor"`
+	Concurrency                              *int               `json:"concurrency"`
 	ID                                       int64              `json:"id"`
 	Name                                     string             `json:"name"`
 	Platform                                 string             `json:"platform"`
@@ -888,4 +890,38 @@ func validateSub2Account(account Sub2Account, expectedID int64) (Sub2Account, er
 		return Sub2Account{}, errors.New("Sub2API returned an invalid account rate multiplier")
 	}
 	return account, nil
+}
+
+// UpdateCapacity only accepts scheduling-owned fields; billing fields cannot pass.
+func (c *Sub2Client) UpdateCapacity(ctx context.Context, id int64, fields map[string]any) (Sub2Account, error) {
+	if id <= 0 || len(fields) == 0 {
+		return Sub2Account{}, errors.New("empty control update")
+	}
+	for k, v := range fields {
+		if k != "priority" && k != "load_factor" && k != "concurrency" {
+			return Sub2Account{}, errors.New("unsupported control field")
+		}
+		if v == nil && k == "load_factor" {
+			continue
+		}
+		n, ok := v.(float64)
+		if !ok {
+			if i, yes := v.(int); yes {
+				n = float64(i)
+				ok = true
+			}
+		}
+		if !ok || math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) || n < 0 || n > 1000000 || ((k == "concurrency" || k == "load_factor") && n < 1) {
+			return Sub2Account{}, errors.New("invalid control value")
+		}
+	}
+	raw, err := c.request(ctx, http.MethodPut, fmt.Sprintf("/accounts/%d", id), fields, "application/json")
+	if err != nil {
+		return Sub2Account{}, err
+	}
+	account, err := decodeObject[Sub2Account](raw)
+	if err != nil {
+		return Sub2Account{}, err
+	}
+	return validateSub2Account(account, id)
 }

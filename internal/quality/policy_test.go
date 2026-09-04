@@ -86,7 +86,7 @@ func TestCostAndBalanceNeverBecomeZeroOnMissingData(t *testing.T) {
 	rate := 2.0
 	previous := 1.0
 	balance := 0.0
-	d := Evaluate(p, base, Snapshot{Samples: recentSamples(now, 5, true, 1), Rate: &rate, PreviousRate: &previous, RateFresh: true, Balance: &balance, BalanceFresh: true}, now)
+	d := Evaluate(p, base, Snapshot{Samples: recentSamples(now, 5, true, 1), Rate: &rate, PreviousRate: &previous, RateFresh: true, RateAt: &now, Balance: &balance, BalanceFresh: true, BalanceAt: &now}, now)
 	if d.State.Tier != 2 || !d.HardFailure {
 		t.Fatalf("financial=%+v", d)
 	}
@@ -113,8 +113,69 @@ func TestFinancialRiskDoesNotRequireModelProbe(t *testing.T) {
 	limit := 10.0
 	zero := 0.0
 	p.LowBalance = &limit
-	d := Evaluate(p, State{Baseline: 10, Desired: 10}, Snapshot{Balance: &zero, BalanceFresh: true}, time.Now())
+	now := time.Now()
+	d := Evaluate(p, State{Baseline: 10, Desired: 10}, Snapshot{Balance: &zero, BalanceFresh: true, BalanceAt: &now}, now)
 	if d.State.Desired != 30 || !d.HardFailure || d.State.Status != "degraded" {
 		t.Fatalf("zero balance not handled: %+v", d)
+	}
+}
+
+func TestSnapshotRechecksAllEvidenceTimestamps(t *testing.T) {
+	now := time.Now().UTC()
+	old := now.Add(-31 * time.Second)
+	future := now.Add(10 * time.Second)
+	p := DefaultPolicy()
+	p.FreshSeconds = 30
+	balance, rate := 50.0, 1.0
+	original := Snapshot{Balance: &balance, BalanceFresh: true, BalanceAt: &now, Rate: &rate, RateFresh: true, RateAt: &now, TrafficFresh: true, TrafficAt: &now}
+	for _, at := range []*time.Time{&old, &future, nil} {
+		s := original
+		s.BalanceAt = at
+		s.RateAt = at
+		s.TrafficAt = at
+		s = s.At(p, now)
+		if s.BalanceFresh || s.RateFresh || s.TrafficFresh {
+			t.Fatalf("invalid timestamps accepted: %+v", s)
+		}
+	}
+	if s := original.At(p, now); !s.BalanceFresh || !s.RateFresh || !s.TrafficFresh {
+		t.Fatal("fresh data rejected")
+	}
+	if s := original.At(p, now.Add(31*time.Second)); s.BalanceFresh || s.RateFresh || s.TrafficFresh {
+		t.Fatal("cached collector success outlived evidence")
+	}
+}
+func TestSortingLatencyUsesFreshSufficientTrafficThenProbe(t *testing.T) {
+	now := time.Now().UTC()
+	p := DefaultPolicy()
+	fast := 100
+	snapshot := Snapshot{Samples: recentSamples(now, 5, true, 500), TrafficFresh: true, TrafficAt: &now, TrafficTotal: 10, TrafficLatencySamples: 5, TrafficLatencyAt: &now, TrafficP95: &fast}
+	d := Evaluate(p, State{}, snapshot, now)
+	if d.SortingLatency == nil || *d.SortingLatency != 100 || d.LatencySource != "traffic" {
+		t.Fatalf("traffic ignored: %+v", d)
+	}
+	expiredLatency := now.Add(-601 * time.Second)
+	snapshot.TrafficLatencyAt = &expiredLatency
+	d = Evaluate(p, State{}, snapshot, now)
+	if d.LatencySource != "probe" {
+		t.Fatal("new non-latency request refreshed stale TTFT data")
+	}
+	snapshot.TrafficLatencyAt = &now
+	snapshot.TrafficLatencySamples = 1
+	d = Evaluate(p, State{}, snapshot, now)
+	if d.SortingLatency == nil || *d.SortingLatency != 500 || d.LatencySource != "probe" {
+		t.Fatal("one latency field treated as sufficient traffic")
+	}
+	snapshot.TrafficLatencySamples = 5
+	old := now.Add(-601 * time.Second)
+	snapshot.TrafficAt = &old
+	d = Evaluate(p, State{}, snapshot, now)
+	if d.LatencySource != "probe" {
+		t.Fatal("expired traffic used")
+	}
+	snapshot.Samples = recentSamples(old, 5, true, 500)
+	d = Evaluate(p, State{}, snapshot, now)
+	if d.SortingLatency != nil || d.LatencySource != "unknown" {
+		t.Fatal("expired probe used for sorting")
 	}
 }

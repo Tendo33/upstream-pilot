@@ -126,19 +126,24 @@ func (s *Scheduler) claim(ctx context.Context) (scheduledTask, error) {
 		return task, err
 	}
 
+	// Traffic, probe and price work share a due-time queue. Separate leases let
+	// real traffic collection run during a long probe without starving probes.
 	err = s.app.db.QueryRow(ctx, `
-		WITH candidate AS (
-		 SELECT a.id,
-		   CASE WHEN (a.health_enabled OR a.managed_hold) AND a.next_probe_at<=now() THEN 'probe' ELSE 'rate' END AS kind
-		 FROM upstream_accounts a JOIN sites s ON s.id=a.site_id
-		 WHERE s.enabled AND a.deleted_at IS NULL AND (a.work_lease_until IS NULL OR a.work_lease_until<now())
-		   AND (((a.health_enabled OR a.managed_hold) AND a.next_probe_at<=now()) OR (a.rate_sync_enabled AND a.next_rate_sync_at<=now()))
-		 ORDER BY LEAST(CASE WHEN a.health_enabled OR a.managed_hold THEN a.next_probe_at ELSE 'infinity'::timestamptz END,
-		                CASE WHEN a.rate_sync_enabled THEN a.next_rate_sync_at ELSE 'infinity'::timestamptz END)
-		 FOR UPDATE OF a SKIP LOCKED LIMIT 1
-		)
-		UPDATE upstream_accounts a SET work_lease_until=now()+interval '12 minutes' FROM candidate c WHERE a.id=c.id RETURNING a.id,c.kind`,
-	).Scan(&task.ID, &task.Kind)
+ WITH candidate AS (
+  SELECT a.id,task.kind FROM upstream_accounts a JOIN sites s ON s.id=a.site_id
+  CROSS JOIN LATERAL (VALUES
+   ('traffic',a.next_traffic_at,true,a.traffic_lease_until),
+   ('probe',a.next_probe_at,a.health_enabled OR a.managed_hold,a.work_lease_until),
+   ('rate',a.next_rate_sync_at,a.rate_sync_enabled,a.work_lease_until)
+  ) task(kind,due,enabled,lease)
+  WHERE s.enabled AND a.deleted_at IS NULL AND task.enabled AND task.due<=now() AND (task.lease IS NULL OR task.lease<now())
+  ORDER BY task.due,task.kind,a.id FOR UPDATE OF a SKIP LOCKED LIMIT 1
+ )
+ UPDATE upstream_accounts a SET
+  traffic_lease_until=CASE WHEN c.kind='traffic' THEN now()+interval '30 seconds' ELSE a.traffic_lease_until END,
+  work_lease_until=CASE WHEN c.kind<>'traffic' THEN now()+interval '12 minutes' ELSE a.work_lease_until END
+ FROM candidate c WHERE a.id=c.id RETURNING a.id,c.kind`).Scan(&task.ID, &task.Kind)
+
 	return task, err
 }
 
@@ -157,9 +162,14 @@ func (s *Scheduler) execute(ctx context.Context, task scheduledTask) {
 		}
 	case "reconcile":
 		_, err = s.app.reconcileSite(ctx, task.ID, "", "")
-		if err != nil {
-			_, _ = s.app.db.Exec(ctx, `UPDATE sites SET reconcile_lease_until=NULL,next_reconcile_at=now()+reconcile_interval_seconds*interval '1 second' WHERE id=$1`, task.ID)
+	case "traffic":
+		var work AccountWork
+		work, err = s.app.loadAccountWork(ctx, task.ID, "")
+		if err == nil {
+			err = s.app.sampleQualityTraffic(ctx, work)
 		}
+		_, updateErr := s.app.db.Exec(ctx, `UPDATE upstream_accounts SET traffic_lease_until=NULL,next_traffic_at=now()+interval '60 seconds' WHERE id=$1`, task.ID)
+		err = errors.Join(err, updateErr)
 	case "probe", "rate":
 		var work AccountWork
 		work, err = s.app.loadAccountWork(ctx, task.ID, "")
@@ -169,7 +179,6 @@ func (s *Scheduler) execute(ctx context.Context, task scheduledTask) {
 			_, err = s.app.runRateSync(ctx, work, "")
 		}
 		if err == nil && task.Kind == "probe" {
-			_ = s.app.sampleQualityTraffic(ctx, work)
 			_, err = s.app.db.Exec(ctx, `UPDATE upstream_accounts SET work_lease_until=NULL WHERE id=$1`, task.ID)
 		}
 		if err != nil {

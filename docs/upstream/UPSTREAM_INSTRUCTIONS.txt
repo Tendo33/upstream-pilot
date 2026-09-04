@@ -1,6 +1,0 @@
-# 项目协作约定
-
-## 发布语言
-
-- 本项目的 Git commit message 使用中文书写。
-- 本项目的 GitHub Release changelog 使用中文书写。

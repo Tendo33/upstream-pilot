@@ -92,7 +92,7 @@ interface SelectMenuProps {
   disabled?: boolean;
 }
 
-const emptySelectValue = "__s2am_empty_value__";
+const emptySelectValue = "__pilot_empty_value__";
 
 export function SelectMenu({ value, onChange, options, label, placeholder = "请选择", icon, className, disabled }: SelectMenuProps) {
   const selected = options.find((option) => option.value === value);

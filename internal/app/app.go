@@ -7,10 +7,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"sub2api-upstream-manager/internal/auditlog"
-	"sub2api-upstream-manager/internal/config"
-	"sub2api-upstream-manager/internal/secret"
-	"sub2api-upstream-manager/internal/upstream"
+	"github.com/Tendo33/upstream-pilot/internal/auditlog"
+	"github.com/Tendo33/upstream-pilot/internal/config"
+	"github.com/Tendo33/upstream-pilot/internal/secret"
+	"github.com/Tendo33/upstream-pilot/internal/upstream"
 )
 
 type App struct {
@@ -23,6 +23,7 @@ type App struct {
 	logger               *slog.Logger
 	balanceRefreshSignal chan struct{}
 	controlSlots         chan struct{}
+	priceSlots           chan struct{}
 }
 
 func New(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error) {
@@ -45,6 +46,7 @@ func New(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error)
 		logger:               logger,
 		balanceRefreshSignal: make(chan struct{}, 1),
 		controlSlots:         make(chan struct{}, 4),
+		priceSlots:           make(chan struct{}, 2),
 	}
 	if err := application.migrateLegacyAuditEvents(context.Background()); err != nil {
 		return nil, err

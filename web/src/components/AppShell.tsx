@@ -127,7 +127,7 @@ export function AppShell({ user, dark, onToggleTheme, onLogout, children }: AppS
           <div className="top-nav-actions">
             <a
               className={cx("top-nav-action", "top-nav-github", expandedItem === "github" && "dock-item-expanded")}
-              href="https://github.com/langrenjh-alt/S2AM-GO"
+              href="https://github.com/Tendo33/upstream-pilot"
               target="_blank"
               rel="noopener noreferrer"
               style={dockLabelStyle("GitHub")}
@@ -200,7 +200,7 @@ export function AppShell({ user, dark, onToggleTheme, onLogout, children }: AppS
                       rel="noopener noreferrer"
                       title={`提交 ${versionStatus.commit} · 构建时间 ${versionStatus.build_time}`}
                     >
-                      <span>Upstream Manager <strong>{versionStatus.current_version}</strong></span>
+                      <span>Upstream Pilot <strong>{versionStatus.current_version}</strong></span>
                       {versionStatus.update_available && versionStatus.latest_version && (
                         <span className="top-nav-version-update">
                           可更新至 {versionStatus.latest_version}
@@ -228,9 +228,9 @@ export function AppShell({ user, dark, onToggleTheme, onLogout, children }: AppS
 
 function Brand() {
   return (
-    <Link className="brand top-nav-brand" to="/" aria-label="Upstream Manager" title="Upstream Manager">
-      <span className="brand-mark"><span /></span>
-      <span className="brand-name">Upstream<span> Manager</span></span>
+    <Link className="brand top-nav-brand" to="/" aria-label="Upstream Pilot" title="Upstream Pilot">
+      <svg className="pilot-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="currentColor"/><path d="M8 23V18L16 13M24 23V18L16 13M16 24V8M11 12L16 7L21 12" fill="none" stroke="var(--surface)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+      <span className="brand-name">Upstream<span> Pilot</span></span>
     </Link>
   );
 }

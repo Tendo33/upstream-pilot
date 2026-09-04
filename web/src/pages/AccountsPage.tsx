@@ -435,7 +435,7 @@ export function AccountsPage() {
               <AccountBalanceValue balance={balances[account.id]} requestError={balanceError} />
               <div className="account-priority" role="cell">
                 <strong>{account.priority}</strong>
-                {account.guard_holding ? <Badge tone="warning">保护中</Badge> : <span>{account.priority_enabled ? "自动排序" : "固定"}</span>}
+                <span>控制模式见质量页</span>
               </div>
               <div className="automation-switches" role="cell">
                 <AutomationToggle icon={<HeartPulse size={15} />} label="测活" checked={account.health_enabled} disabled={busy.startsWith(account.id)} onChange={(value) => void quickToggle(account, "health_enabled", value)} />

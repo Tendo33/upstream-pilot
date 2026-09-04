@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"sub2api-upstream-manager/internal/auditlog"
+	"github.com/Tendo33/upstream-pilot/internal/auditlog"
 )
 
 const legacyAuditMigrationLockID int64 = 7820133780

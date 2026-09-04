@@ -1,18 +1,23 @@
-# Verification
+# Upstream Pilot 验证手册
 
-Run `make test` after installing Go and Node.js. For real database coverage, export `SUB2UPSTREAM_TEST_DATABASE_URL` to an isolated PostgreSQL database and run `make integration`.
+```bash
+make test
+PILOT_TEST_DATABASE_URL='<isolated PostgreSQL URL>' make integration
+```
 
-The integration suite in `internal/app/quality_integration_test.go` exercises observation without writes, failure demotion, gradual recovery, manual overrides, rate history, interrupted writes, notification delivery, scheduler execution, policy HTTP payloads, group/model aggregation, release and model-specific backup protection. Each test creates and removes its own randomly named schema.
+集成测试需要有创建 schema 权限的专用数据库，每个用例只清理自己创建的 schema。正式竞态验收可运行：
 
-`qa/fake-sub2api` is a loopback-only supplier simulator. Start it with `make demo-upstream`. Admin key: `test-admin-key`.
+```bash
+PILOT_TEST_DATABASE_URL='<isolated PostgreSQL URL>' go test -race -count=1 ./...
+```
 
-Example scenario controls (local fixture only):
+`make demo-upstream` 启动本机模拟器，默认 `127.0.0.1:33888`，公开测试 Key 为 `test-admin-key`。它不连接真实供应商。
 
 ```bash
 curl -X POST http://127.0.0.1:33888/control/101 -H 'Content-Type: application/json' -d '{"probe_success":false}'
 curl -X POST http://127.0.0.1:33888/control/101 -H 'Content-Type: application/json' -d '{"probe_success":true,"probe_delay_ms":1500,"billing_rate":2}'
 ```
 
-The original PowerShell acceptance script is preserved in `docs/upstream/e2e-api.ps1.txt` as upstream reference. It validates the original scheduler and is not this fork's acceptance command.
+建议覆盖：默认观察、降级与恢复、旧意图失效、部分写回、事务回滚、来源更换、证据过期、共享组故障、真实请求延迟回退及容量还原。模拟器不实现 Sub2API 的全部加权/粘性调度行为。
 
-Browser verification uses the real control UI with this local fixture; screenshots and transient browser files belong under ignored `output/playwright/` and `.playwright-cli/` directories.
+截图与运行数据属于忽略的 `output/`、`.local/` 和 `.playwright-cli/`。文档使用截图时只采用本项目生成的合成数据画面。

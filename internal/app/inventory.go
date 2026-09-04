@@ -8,11 +8,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
-	"sub2api-upstream-manager/internal/upstream"
+	"github.com/Tendo33/upstream-pilot/internal/upstream"
 )
 
 func (a *App) syncSite(ctx context.Context, siteID, ownerFilter, actorID, mode string) error {
+	return a.withSiteSchedulingLock(ctx, siteID, func(_ *pgxpool.Conn) error { return a.syncSiteLocked(ctx, siteID, ownerFilter, actorID, mode) })
+}
+func (a *App) syncSiteLocked(ctx context.Context, siteID, ownerFilter, actorID, mode string) error {
 	var inventoryStartedAt time.Time
 	if err := a.db.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&inventoryStartedAt); err != nil {
 		return err
@@ -91,7 +95,7 @@ func (a *App) syncSite(ctx context.Context, siteID, ownerFilter, actorID, mode s
 			INSERT INTO upstream_accounts(id,site_id,remote_id,name,platform,account_type,remote_status,schedulable,priority,rate_multiplier,remote_updated_at,observed_source_base_url,observed_source_credential_fingerprint,source_type,probe_model,deleted_at,observed_at)
 			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NULLIF($13,''),$14,$15,NULL,now())
 			ON CONFLICT(site_id,remote_id) DO UPDATE SET name=excluded.name,platform=excluded.platform,account_type=excluded.account_type,
-			 remote_status=excluded.remote_status,
+			 config_generation=upstream_accounts.config_generation+1,remote_status=excluded.remote_status,
 			 schedulable=CASE WHEN upstream_accounts.updated_at<=$19 THEN excluded.schedulable ELSE upstream_accounts.schedulable END,
 			 priority=excluded.priority,rate_multiplier=excluded.rate_multiplier,
 			 remote_updated_at=excluded.remote_updated_at,

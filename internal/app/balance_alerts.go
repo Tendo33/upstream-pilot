@@ -422,7 +422,7 @@ func sendWeComWebhook(ctx context.Context, client *http.Client, webhookURL, cont
 
 func buildWeComBalanceAlertMessage(threshold float64, accounts []lowBalanceAccount, sentAt time.Time, publicURL string) string {
 	var builder strings.Builder
-	builder.WriteString("## S2AM-GO 余额预警\n")
+	builder.WriteString("## Upstream Pilot 余额预警\n")
 	builder.WriteString("> 预警阈值：<font color=\"warning\">")
 	builder.WriteString(formatBalanceAlertNumber(threshold))
 	builder.WriteString("</font>\n")
@@ -457,7 +457,7 @@ func buildWeComBalanceAlertMessage(threshold float64, accounts []lowBalanceAccou
 }
 
 func buildWeComTestMessage(sentAt time.Time) string {
-	return "## S2AM-GO 余额预警测试\n> 企业微信机器人连接正常\n> 发送时间：" +
+	return "## Upstream Pilot 余额预警测试\n> 企业微信机器人连接正常\n> 发送时间：" +
 		sentAt.In(time.FixedZone("CST", 8*60*60)).Format("2006-01-02 15:04:05")
 }
 

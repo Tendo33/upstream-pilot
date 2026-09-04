@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"sub2api-upstream-manager/internal/secret"
+	"github.com/Tendo33/upstream-pilot/internal/secret"
 )
 
 func TestNormalizeBalanceAccountIDs(t *testing.T) {

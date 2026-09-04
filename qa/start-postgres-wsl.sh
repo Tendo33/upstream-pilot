@@ -3,9 +3,9 @@ set -euo pipefail
 
 PG_VERSION="${PG_VERSION:-16}"
 PG_PORT="${PG_PORT:-55432}"
-PG_USER="${PG_USER:-s2amtest}"
-PG_DATABASE="${PG_DATABASE:-s2am_test}"
-ROOT="${S2AM_TEST_PG_ROOT:-$HOME/.local/share/s2am-pg${PG_VERSION}}"
+PG_USER="${PG_USER:-pilottest}"
+PG_DATABASE="${PG_DATABASE:-pilot_test}"
+ROOT="${PILOT_TEST_PG_ROOT:-$HOME/.local/share/pilot-pg${PG_VERSION}}"
 PACKAGE_DIR="$ROOT/packages"
 RUNTIME_DIR="$ROOT/runtime"
 DATA_DIR="$ROOT/data"

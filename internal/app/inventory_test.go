@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"sub2api-upstream-manager/internal/upstream"
+	"github.com/Tendo33/upstream-pilot/internal/upstream"
 )
 
 func TestDetectAccountSourceTypesSkipsLockedAccounts(t *testing.T) {

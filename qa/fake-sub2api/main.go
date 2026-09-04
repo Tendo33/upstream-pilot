@@ -14,6 +14,8 @@ import (
 )
 
 type account struct {
+	Concurrency    int        `json:"concurrency"`
+	LoadFactor     int        `json:"load_factor"`
 	ID             int64      `json:"id"`
 	Name           string     `json:"name"`
 	Platform       string     `json:"platform"`
@@ -58,7 +60,7 @@ type state struct {
 }
 
 func main() {
-	listenAddr := strings.TrimSpace(os.Getenv("S2AM_FAKE_LISTEN_ADDR"))
+	listenAddr := strings.TrimSpace(os.Getenv("PILOT_FAKE_LISTEN_ADDR"))
 	if listenAddr == "" {
 		listenAddr = "127.0.0.1:33888"
 	}
@@ -87,6 +89,7 @@ func main() {
 	mux.HandleFunc("/newapi/api/pricing", s.newAPIPricing)
 	mux.HandleFunc("/newapi-direct/api/user/self/groups", s.newAPIDirectGroups)
 	mux.HandleFunc("/api/v1/admin/", s.admin)
+	mux.HandleFunc("/v1/chat/completions", s.forward)
 	log.Printf("fake Sub2API listening on %s", listenAddr)
 	log.Fatal(http.ListenAndServe(listenAddr, mux))
 }
@@ -94,8 +97,8 @@ func main() {
 func newState() *state {
 	return &state{
 		accounts: map[int64]*account{
-			101: {ID: 101, Name: "Claude primary", Platform: "anthropic", Type: "apikey", Status: "active", Schedulable: true, Priority: 20, RateMultiplier: 1, AccountGroups: []groupRef{{GroupID: 1, Priority: 20}}},
-			102: {ID: 102, Name: "OpenAI standby", Platform: " OpenAI ", Type: "apikey", Status: "active", Schedulable: true, Priority: 20, RateMultiplier: 1, AccountGroups: []groupRef{{GroupID: 1, Priority: 20}}},
+			101: {Concurrency: 16, LoadFactor: 16, ID: 101, Name: "Claude primary", Platform: "anthropic", Type: "apikey", Status: "active", Schedulable: true, Priority: 20, RateMultiplier: 1, AccountGroups: []groupRef{{GroupID: 1, Priority: 20}}},
+			102: {Concurrency: 16, LoadFactor: 16, ID: 102, Name: "OpenAI standby", Platform: " OpenAI ", Type: "apikey", Status: "active", Schedulable: true, Priority: 20, RateMultiplier: 1, AccountGroups: []groupRef{{GroupID: 1, Priority: 20}}},
 		},
 		probeSuccess:          map[int64]bool{101: true, 102: true},
 		probeFailures:         make(map[int64]map[string]any),
@@ -115,14 +118,14 @@ func newState() *state {
 func validateListenAddr(value string) error {
 	host, _, err := net.SplitHostPort(value)
 	if err != nil {
-		return fmt.Errorf("invalid S2AM_FAKE_LISTEN_ADDR: %w", err)
+		return fmt.Errorf("invalid PILOT_FAKE_LISTEN_ADDR: %w", err)
 	}
 	if strings.EqualFold(host, "localhost") {
 		return nil
 	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("S2AM_FAKE_LISTEN_ADDR must use a loopback address")
+		return fmt.Errorf("PILOT_FAKE_LISTEN_ADDR must use a loopback address")
 	}
 	return nil
 }
@@ -244,10 +247,18 @@ func (s *state) accountRoute(w http.ResponseWriter, r *http.Request, path string
 	}
 	if len(parts) == 2 && r.Method == http.MethodPut {
 		var update struct {
+			Concurrency    *int     `json:"concurrency"`
+			LoadFactor     *int     `json:"load_factor"`
 			Priority       *int     `json:"priority"`
 			RateMultiplier *float64 `json:"rate_multiplier"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&update)
+		if update.Concurrency != nil {
+			item.Concurrency = *update.Concurrency
+		}
+		if update.LoadFactor != nil {
+			item.LoadFactor = *update.LoadFactor
+		}
 		if update.Priority != nil {
 			item.Priority = *update.Priority
 		}
@@ -516,4 +527,49 @@ func (s *state) newAPISelf(w http.ResponseWriter, r *http.Request) {
 
 func (s *state) newAPIPricing(w http.ResponseWriter, r *http.Request) {
 	write(w, http.StatusOK, map[string]any{"success": true, "group_ratio": map[string]any{"default": 0.6}})
+}
+
+// This deterministic mock selects the lowest numeric priority. It intentionally
+// does not emulate Sub2API's sticky sessions, weighted load or request retries.
+func (s *state) forward(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", 405)
+		return
+	}
+	var input struct {
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid JSON", 400)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var selected *account
+	for _, a := range s.accounts {
+		if !a.Schedulable || a.Status != "active" {
+			continue
+		}
+		member := false
+		for _, g := range a.AccountGroups {
+			if g.GroupID == 1 {
+				member = true
+			}
+		}
+		if !member {
+			continue
+		}
+		if selected == nil || a.Priority < selected.Priority || (a.Priority == selected.Priority && a.ID < selected.ID) {
+			selected = a
+		}
+	}
+	if selected == nil {
+		write(w, 503, map[string]any{"error": "no schedulable upstream"})
+		return
+	}
+	if !s.probeSuccess[selected.ID] {
+		write(w, 503, map[string]any{"error": "mock upstream failure", "upstream_account_id": selected.ID})
+		return
+	}
+	write(w, 200, map[string]any{"model": input.Model, "upstream_account_id": selected.ID, "choices": []any{map[string]any{"index": 0, "message": map[string]string{"role": "assistant", "content": "mock response"}, "finish_reason": "stop"}}})
 }

@@ -21,13 +21,13 @@ import (
 )
 
 const (
-	sessionCookie   = "s2am_session"
-	csrfCookie      = "s2am_csrf"
+	sessionCookie   = "pilot_session"
+	csrfCookie      = "pilot_csrf"
 	userAdminLockID = int64(7820133777)
 
 	credentialFailureLimit = 5
 	clientFailureLimit     = 30
-	passwordHashPrefix     = "$s2am-sha256$"
+	passwordHashPrefix     = "$pilot-sha256$"
 	dummyPasswordHash      = passwordHashPrefix + "$2a$12$QJWdPvDjdwWG7q8AAMvR0evO2hXloZGNKMVm/2rZ4nVB/Hk4VQf.q"
 )
 
