@@ -3,7 +3,7 @@
 help:
 	@printf '%s\n' 'make build       Build UI and executable' 'make test        Build UI and run Go tests' 'make integration Run PostgreSQL integration and race tests' 'make run         Run with exported S2AM_* configuration' 'make demo-upstream Start local upstream simulator' 'make release     Linux release (TARGET_ARCH=amd64 or arm64)'
 web:
-	npm --prefix web ci
+	npm --prefix web ci --prefer-offline --fetch-timeout=20000 --fetch-retries=1
 	npm --prefix web run build
 build: web
 	go build -trimpath -o bin/upstream-manager ./cmd/upstream-manager

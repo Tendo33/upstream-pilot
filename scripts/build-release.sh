@@ -8,7 +8,7 @@ task_commit="$(git -C "$task_root" rev-parse --short=12 HEAD)"
 if [[ -n "$(git -C "$task_root" status --porcelain --untracked-files=normal)" ]]; then task_commit="${task_commit}-dirty"; fi
 task_time="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 cd "$task_root"
-npm --prefix web ci
+npm --prefix web ci --prefer-offline --fetch-timeout=20000 --fetch-retries=1
 npm --prefix web run build
 go test ./...
 mkdir -p dist
