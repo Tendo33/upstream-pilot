@@ -70,6 +70,9 @@ func validateEngineEvidence(works []engineWork, components map[string]string, id
 		if components[p.Work.ID] != components[id] || p.PreflightError != nil {
 			continue
 		}
+		if p.CostDeadline != nil && !now.Before(*p.CostDeadline) {
+			return errEngineReplan
+		}
 		latest := quality.Evaluate(p.Policy, p.Old, p.Snapshot, now)
 		if plannedEngineFacts(p) != decisionFacts(p, latest, now) {
 			return errEngineReplan
@@ -79,6 +82,12 @@ func validateEngineEvidence(works []engineWork, components map[string]string, id
 }
 
 func (a *App) requireCurrentEvidence(ctx context.Context, p *engineWork) error {
+	if err := a.requireTaskLease(ctx); err != nil {
+		return err
+	}
+	if p.CostDeadline != nil && !time.Now().Before(*p.CostDeadline) {
+		return errEngineReplan
+	}
 	var unchanged bool
 	if err := a.db.QueryRow(ctx, `SELECT source_generation=$2 AND config_generation=$3 AND deleted_at IS NULL FROM upstream_accounts WHERE id=$1`, p.Work.ID, p.Work.SourceGeneration, p.Work.ConfigGeneration).Scan(&unchanged); err != nil {
 		return err

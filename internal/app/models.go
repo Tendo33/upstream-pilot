@@ -116,12 +116,13 @@ type Identity struct {
 }
 
 type SiteSecret struct {
-	ID               string
-	OwnerID          string
-	Name             string
-	BaseURL          string
-	APIKeyCiphertext string
-	Enabled          bool
+	TelemetryGeneration int64
+	ID                  string
+	OwnerID             string
+	Name                string
+	BaseURL             string
+	APIKeyCiphertext    string
+	Enabled             bool
 }
 
 type AccountWork struct {

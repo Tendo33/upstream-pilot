@@ -4,6 +4,8 @@ A Sub2API operations console for upstream quality, procurement costs and group s
 
 Upstream Pilot measures first-content latency, failures, balances and cost multipliers; explains risks; and applies explicitly enabled priority, scheduling and capacity controls. Observation is the default. Sub2API remains responsible for request forwarding, affinity and retries.
 
+It also provides version capability reports, protocol-specific group/account canaries with hard request and token budgets, confirmed supplier failure domains, normalized model price cards, conservative balance runway estimates, request-level outcome deduplication, stable rollouts, action-effect records and scheduler self-health. Missing evidence remains unknown.
+
 ## Run
 
 Requirements: Go 1.26+, Node.js 20+, PostgreSQL 14+.

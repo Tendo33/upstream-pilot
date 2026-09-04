@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"github.com/go-chi/chi/v5"
 	"io"
 	"log/slog"
@@ -24,19 +26,20 @@ import (
 )
 
 type qualityTestRemote struct {
-	mu             sync.Mutex
-	priority       int
-	loadFactor     int
-	concurrency    int
-	backupPriority int
-	backupDelayMS  int
-	rate           float64
-	success        bool
-	schedulable    bool
-	writes         []map[string]any
-	notifications  int
-	rejectWrites   bool
-	adminDenied    bool
+	acceptBackupWrites bool
+	mu                 sync.Mutex
+	priority           int
+	loadFactor         int
+	concurrency        int
+	backupPriority     int
+	backupDelayMS      int
+	rate               float64
+	success            bool
+	schedulable        bool
+	writes             []map[string]any
+	notifications      int
+	rejectWrites       bool
+	adminDenied        bool
 }
 
 func (s *qualityTestRemote) serve(w http.ResponseWriter, r *http.Request) {
@@ -99,6 +102,13 @@ func (s *qualityTestRemote) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(r.URL.Path, "/accounts/8"):
 		if s.backupDelayMS > 0 {
 			time.Sleep(time.Duration(s.backupDelayMS) * time.Millisecond)
+		}
+		if r.Method == http.MethodPut && s.acceptBackupWrites {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if value, ok := body["priority"].(float64); ok {
+				s.backupPriority = int(value)
+			}
 		}
 		send(map[string]any{"id": 8, "priority": s.backupPriority, "status": "active", "schedulable": true})
 	case strings.HasSuffix(r.URL.Path, "/accounts/7"):
@@ -177,13 +187,13 @@ func newQualityIntegration(t *testing.T) (*App, AccountWork, *qualityTestRemote,
 	}{
 		{`INSERT INTO users(id,email,password_hash,role) VALUES($1,'operator@example.test','unused','admin')`, []any{owner}},
 		{`INSERT INTO sites(id,owner_id,name,base_url,api_key_ciphertext) VALUES($1,$2,'test-site',$3,$4)`, []any{site, owner, server.URL, secret}},
-		{`INSERT INTO upstream_accounts(id,site_id,remote_id,name,platform,account_type,remote_status,schedulable,priority,rate_multiplier,health_enabled,probe_model) VALUES($1,$2,7,'test-upstream','openai','apikey','active',true,20,1,true,'test-model')`, []any{id, site}},
+		{`INSERT INTO upstream_accounts(id,site_id,remote_id,name,platform,account_type,remote_status,schedulable,priority,rate_multiplier,health_enabled,probe_model,source_mapping_fingerprint) VALUES($1,$2,7,'test-upstream','openai','apikey','active',true,20,1,true,'test-model',$3)`, []any{id, site, qualityTestMappingFingerprint()}},
 	} {
 		if _, err = pool.Exec(ctx, q.sql, q.args...); err != nil {
 			t.Fatal(err)
 		}
 	}
-	native := upstream.NativeConstraints{Known: true, GroupsKnown: true, Groups: []int64{1}, MappingKnown: true, Concurrency: new(8)}
+	native := upstream.NativeConstraints{Known: true, GroupsKnown: true, Groups: []int64{1}, MappingKnown: true, Mapping: map[string]string{"test-model": "test-model"}, Concurrency: new(8)}
 	rawNative, _ := json.Marshal(native)
 	if _, err = pool.Exec(ctx, `UPDATE upstream_accounts SET native_constraints=$2,native_checked_at=now() WHERE id=$1`, id, rawNative); err != nil {
 		t.Fatal(err)
@@ -192,6 +202,7 @@ func newQualityIntegration(t *testing.T) (*App, AccountWork, *qualityTestRemote,
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedSupplierIdentity(t, app, work.ID)
 	return app, work, remote, server.URL
 }
 
@@ -355,7 +366,7 @@ func TestQualityInterruptedWriteRecoveryAndNotifications(t *testing.T) {
 func TestQualitySchedulerCollectsWithoutRemoteWrites(t *testing.T) {
 	a, w, remote, _ := newQualityIntegration(t)
 	ctx := context.Background()
-	if _, err := a.db.Exec(ctx, `UPDATE sites SET next_inventory_at=now()+interval '1 hour',next_reconcile_at=now()+interval '1 hour' WHERE id=$1`, w.SiteID); err != nil {
+	if _, err := a.db.Exec(ctx, `UPDATE sites SET next_usage_at=now()+interval '1 hour',next_inventory_at=now()+interval '1 hour',next_reconcile_at=now()+interval '1 hour' WHERE id=$1`, w.SiteID); err != nil {
 		t.Fatal(err)
 	}
 	scheduler := a.NewScheduler()
@@ -363,7 +374,7 @@ func TestQualitySchedulerCollectsWithoutRemoteWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Kind == "traffic" {
+	if task.Kind == "traffic-site" {
 		scheduler.execute(ctx, task)
 		task, err = scheduler.claim(ctx)
 		if err != nil {
@@ -538,7 +549,7 @@ func TestQualityPauseRequiresIndependentSwitchAndHealthyModelBackup(t *testing.T
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO upstream_accounts(id,site_id,remote_id,name,platform,account_type,remote_status,schedulable,priority,probe_model) VALUES($1,$2,8,'backup','openai','apikey','active',true,20,'other-model')`, []any{other, w.SiteID}},
+		{`INSERT INTO upstream_accounts(id,site_id,remote_id,name,platform,account_type,remote_status,schedulable,priority,probe_model,source_mapping_fingerprint) VALUES($1,$2,8,'backup','openai','apikey','active',true,20,'other-model',$3)`, []any{other, w.SiteID, qualityTestMappingFingerprint()}},
 		{`INSERT INTO account_group_memberships(account_id,group_id,site_id) VALUES($1,$2,$3)`, []any{other, group, w.SiteID}},
 		{`INSERT INTO quality_states(account_id,baseline_priority,desired_priority,status,last_sample_at) VALUES($1,20,20,'healthy',now())`, []any{other}},
 	} {
@@ -555,6 +566,7 @@ func TestQualityPauseRequiresIndependentSwitchAndHealthyModelBackup(t *testing.T
 	if _, err := a.db.Exec(ctx, `UPDATE upstream_accounts SET probe_model='test-model' WHERE id=$1`, other); err != nil {
 		t.Fatal(err)
 	}
+	seedSupplierIdentity(t, a, other)
 	// A cached healthy label alone is insufficient; seed genuine recent evidence.
 	seedEngineSamples(t, a, w, other, 5, true, 100, 0)
 	if _, err := a.evaluateQuality(ctx, w, w.OwnerID); err != nil {
@@ -613,4 +625,18 @@ func qualityTestBalanceKey(t *testing.T, a *App, id string) string {
 		t.Fatalf("balance work: %v", err)
 	}
 	return accountBalanceCacheKey(works[0])
+}
+
+func qualityTestMappingFingerprint() string {
+	raw, _ := json.Marshal(struct {
+		Mapping     map[string]string
+		Passthrough bool
+	}{Mapping: map[string]string{"test-model": "test-model"}})
+	return fmt.Sprintf("%x", sha256.Sum256(raw))
+}
+
+func seedSupplierIdentity(t *testing.T, a *App, id string) {
+	t.Helper()
+	raw, _ := json.Marshal(AccountOperations{MultiplierBasis: "synthetic-common-basis", Provider: id, FailureDomain: id, QuotaPool: id, Confirmed: true})
+	engineRegressionSQL(t, a, `INSERT INTO account_operations(account_id,source_generation,config) SELECT id,source_generation,$2 FROM upstream_accounts WHERE id=$1 ON CONFLICT(account_id) DO UPDATE SET source_generation=excluded.source_generation,config=excluded.config`, id, raw)
 }

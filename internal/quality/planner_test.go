@@ -5,6 +5,42 @@ import (
 	"time"
 )
 
+func TestPlannerOneMillisecondDoesNotReversePriority(t *testing.T) {
+	a, b := 100, 101
+	p := DefaultGroupPolicy()
+	p.Strategy = SpeedFirst
+	nodes := []Candidate{{ID: "a", Pools: []string{"g"}, Baseline: 20, Current: 20, Desired: 20, Healthy: true, Mutable: true, Available: true, Latency: &a}, {ID: "b", Pools: []string{"g"}, Baseline: 20, Current: 30, Desired: 20, Healthy: true, Mutable: true, Available: true, Latency: &b}}
+	first := Plan(nodes, map[string]GroupPolicy{"g": p})
+	a, b = 101, 100
+	second := Plan(nodes, map[string]GroupPolicy{"g": p})
+	if first["a"].Priority != second["a"].Priority || first["b"].Priority != second["b"].Priority {
+		t.Fatalf("noise changed order: %+v %+v", first, second)
+	}
+}
+
+func TestWorseningRiskCannotPromoteAnAlreadyLowPriorityAccount(t *testing.T) {
+	nodes := []Candidate{{ID: "bad", Pools: []string{"g"}, Baseline: 20, Current: 200, Desired: 40, Tier: 2, RiskWorsened: true, Mutable: true, Available: true}, {ID: "good", Pools: []string{"g"}, Baseline: 100, Current: 100, Desired: 100, Healthy: true, Available: true}}
+	if plan := Plan(nodes, nil); plan["bad"].Priority < 200 {
+		t.Fatalf("risk escalation promoted bad account: %+v", plan)
+	}
+}
+
+func TestUnknownOrDifferentPriceBasisCannotRankSuppliers(t *testing.T) {
+	cheap, expensive := 1.0, 10.0
+	p := DefaultGroupPolicy()
+	p.Strategy = PriceFirst
+	nodes := []Candidate{{ID: "a", Pools: []string{"g"}, Baseline: 20, Current: 20, Desired: 20, Healthy: true, Available: true, Mutable: true, Price: &expensive, PriceBasis: "basis-a"}, {ID: "b", Pools: []string{"g"}, Baseline: 20, Current: 20, Desired: 20, Healthy: true, Available: true, Mutable: true, Price: &cheap, PriceBasis: "basis-b"}}
+	plan := Plan(nodes, map[string]GroupPolicy{"g": p})
+	if plan["a"].Priority != plan["b"].Priority {
+		t.Fatal("incomparable prices ranked", plan)
+	}
+	nodes[1].PriceBasis = "basis-a"
+	plan = Plan(nodes, map[string]GroupPolicy{"g": p})
+	if plan["b"].Priority >= plan["a"].Priority {
+		t.Fatal("common prices not ranked", plan)
+	}
+}
+
 func TestPlanRanksBadPrimaryBehindHealthyBackup(t *testing.T) {
 	nodes := []Candidate{{ID: "bad", Pools: []string{"group:model"}, Baseline: 1, Current: 1, Desired: 21, Tier: 2, Mutable: true, Available: true}, {ID: "good", Pools: []string{"group:model"}, Baseline: 100, Current: 100, Desired: 100, Healthy: true, Available: true}}
 	result := Plan(nodes, nil)
@@ -20,7 +56,7 @@ func TestPlanRanksBadPrimaryBehindHealthyBackup(t *testing.T) {
 func TestPlanStrategiesAndSharedAccountConflict(t *testing.T) {
 	cheap, expensive := 1.0, 2.0
 	slow, fast := 1000, 100
-	nodes := []Candidate{{ID: "a", Pools: []string{"g"}, Baseline: 20, Current: 20, Healthy: true, Mutable: true, Available: true, Price: &cheap, Latency: &slow}, {ID: "b", Pools: []string{"g"}, Baseline: 20, Current: 20, Healthy: true, Mutable: true, Available: true, Price: &expensive, Latency: &fast}}
+	nodes := []Candidate{{ID: "a", Pools: []string{"g"}, Baseline: 20, Current: 20, Healthy: true, Mutable: true, Available: true, PriceBasis: "common-test", Price: &cheap, Latency: &slow}, {ID: "b", Pools: []string{"g"}, Baseline: 20, Current: 20, Healthy: true, Mutable: true, Available: true, PriceBasis: "common-test", Price: &expensive, Latency: &fast}}
 	price := DefaultGroupPolicy()
 	price.Strategy = PriceFirst
 	speed := price

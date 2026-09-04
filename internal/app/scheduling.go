@@ -182,6 +182,29 @@ func (a *App) withSiteSchedulingLock(ctx context.Context, siteID string, operati
 	if err != nil {
 		return err
 	}
+	if _, scheduled := ctx.Value(taskLeaseContextKey{}).(scheduledTask); scheduled {
+		if err := a.requireTaskLease(ctx); err != nil {
+			return err
+		}
+		connection, e := a.db.Acquire(ctx)
+		if e != nil {
+			return e
+		}
+		defer connection.Release()
+		var locked bool
+		if e = connection.QueryRow(ctx, `SELECT pg_try_advisory_lock($1,$2)`, first, second).Scan(&locked); e != nil {
+			return e
+		}
+		if !locked {
+			return errTaskBusy
+		}
+		defer func() {
+			unlock, stop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stop()
+			_, _ = connection.Exec(unlock, `SELECT pg_advisory_unlock($1,$2)`, first, second)
+		}()
+		return operation(connection)
+	}
 	return withAccountSchedulingLockPool(ctx, pgxAccountSchedulingLockPool{pool: a.db}, first, second, accountSchedulingLockRetryDelay, func(connection accountSchedulingLockConnection) error {
 		return operation(connection.PooledConnection())
 	})

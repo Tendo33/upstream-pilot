@@ -12,7 +12,8 @@ import {
   Unplug,
   Zap,
 } from "lucide-react";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { SiteCapabilities } from "../components/SiteCapabilities";
 import { api, errorMessage, json } from "../api";
 import { formatDate } from "../lib";
 import type { Site, SiteInput } from "../types";
@@ -65,6 +66,8 @@ function fromSite(site: Site): SiteInput {
 }
 
 export function SitesPage() {
+  const [capabilitySite, setCapabilitySite] = useState<Site | null>(null);
+  const capabilityReturn = useRef<HTMLButtonElement | null>(null);
   const [sites, setSites] = useState<Site[] | null>(null);
   const [error, setError] = useState("");
   const [editor, setEditor] = useState<{ site: Site | null; values: SiteInput } | null>(null);
@@ -173,12 +176,12 @@ export function SitesPage() {
   return (
     <div className="page">
       <PageHeader
-        eyebrow="Infrastructure"
         title="站点"
         description="管理当前用户拥有的 Sub2API 实例与库存同步策略"
         actions={<Button variant="primary" onClick={() => setEditor({ site: null, values: { ...newSite } })}><Plus size={16} />添加站点</Button>}
       />
 
+      {capabilitySite && <SiteCapabilities key={capabilitySite.id} id={capabilitySite.id} name={capabilitySite.name} close={() => {setCapabilitySite(null); requestAnimationFrame(() => capabilityReturn.current?.focus());}}/>}
       {error ? <div className="inline-alert"><CircleAlert size={16} /><span>{error}</span><Button size="sm" onClick={() => void load()}>重试</Button></div> : null}
 
       {sites.length === 0 ? (
@@ -217,6 +220,7 @@ export function SitesPage() {
                   <Switch checked={site.enabled} onChange={(enabled) => void toggleSite(site, enabled)} label={`${site.enabled ? "停用" : "启用"}${site.name}`} disabled={busy.startsWith(site.id)} />
                 </div>
                 <div className="site-actions">
+                  <Button size="sm" onClick={event => {capabilityReturn.current = event.currentTarget; setCapabilitySite(site);}}>接口能力</Button>
                   <IconButton label="测试连接" onClick={() => void runAction(site, "test")} disabled={Boolean(busy)}>
                     <Zap size={16} className={busy === `${site.id}:test` ? "spin" : undefined} />
                   </IconButton>

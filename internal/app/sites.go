@@ -232,7 +232,7 @@ func (a *App) deleteSite(w http.ResponseWriter, r *http.Request) error {
 
 func (a *App) siteSecret(ctx context.Context, siteID, ownerID string) (SiteSecret, error) {
 	var site SiteSecret
-	err := a.db.QueryRow(ctx, `SELECT id,owner_id,name,base_url,api_key_ciphertext,enabled FROM sites WHERE id=$1 AND owner_id=COALESCE(NULLIF($2,'')::uuid,owner_id)`, siteID, ownerID).Scan(&site.ID, &site.OwnerID, &site.Name, &site.BaseURL, &site.APIKeyCiphertext, &site.Enabled)
+	err := a.db.QueryRow(ctx, `SELECT id,owner_id,name,base_url,api_key_ciphertext,enabled,telemetry_generation FROM sites WHERE id=$1 AND owner_id=COALESCE(NULLIF($2,'')::uuid,owner_id)`, siteID, ownerID).Scan(&site.ID, &site.OwnerID, &site.Name, &site.BaseURL, &site.APIKeyCiphertext, &site.Enabled, &site.TelemetryGeneration)
 	return site, err
 }
 

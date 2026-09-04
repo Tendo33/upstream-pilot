@@ -67,7 +67,7 @@ func (a *App) persistEngineDecision(ctx context.Context, w AccountWork, p engine
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE quality_states SET desired_priority=$2,tier=$3,recovery_streak=$4,last_sample_at=$5,last_changed_at=$6,status=$7,reason=$8,conflict=$9,owned_pause=$10,risks=$11,evaluated_at=now(),plan_error=$12,plan_strategy=$13,source_generation=$14 WHERE account_id=$1`, w.ID, s.Desired, s.Tier, s.RecoveryStreak, s.LastSampleAt, s.LastChangedAt, s.Status, s.Reason, s.Conflict, s.OwnedPause, raw, s.PlanError, s.PlanStrategy, w.SourceGeneration)
+	_, err = tx.Exec(ctx, `UPDATE quality_states SET desired_priority=$2,tier=$3,recovery_streak=$4,last_sample_at=$5,last_changed_at=$6,status=$7,reason=$8,conflict=$9,owned_pause=$10,risks=$11,evaluated_at=now(),plan_error=$12,plan_strategy=$13,source_generation=$14,last_control_applied_at=CASE WHEN $15 THEN now() ELSE last_control_applied_at END WHERE account_id=$1`, w.ID, s.Desired, s.Tier, s.RecoveryStreak, s.LastSampleAt, s.LastChangedAt, s.Status, s.Reason, s.Conflict, s.OwnedPause, raw, s.PlanError, s.PlanStrategy, w.SourceGeneration, applied)
 	if err != nil {
 		return err
 	}
@@ -96,7 +96,7 @@ func (a *App) persistEngineDecision(ctx context.Context, w AccountWork, p engine
 		if applyErr != nil {
 			errorText = truncateError(applyErr)
 		}
-		detail, _ := json.Marshal(map[string]any{"risks": s.Risks, "plan_error": s.PlanError, "controls": p.AppliedControl, "source_generation": w.SourceGeneration, "config_generation": w.ConfigGeneration, "plan_id": p.PlanID, "pools": p.Pools})
+		detail, _ := json.Marshal(map[string]any{"risks": s.Risks, "plan_error": s.PlanError, "controls": p.AppliedControl, "source_generation": w.SourceGeneration, "config_generation": w.ConfigGeneration, "plan_id": p.PlanID, "pools": p.Pools, "settled_intent": p.SettledIntent, "costs": p.Costs})
 		_, err = tx.Exec(ctx, `INSERT INTO quality_decisions(id,account_id,owner_id,mode,status,reason,before_priority,desired_priority,applied,error,detail) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, uuid.NewString(), w.ID, w.OwnerID, p.Policy.Mode, s.Status, s.Reason, before, s.Desired, applied, errorText, detail)
 		if err != nil {
 			return err
@@ -106,6 +106,15 @@ func (a *App) persistEngineDecision(ctx context.Context, w AccountWork, p engine
 			if err != nil {
 				return err
 			}
+		}
+	}
+	if applied && len(p.ActionAfter) > 0 {
+		from, _ := json.Marshal(p.ActionBefore)
+		to, _ := json.Marshal(p.ActionAfter)
+		pools, _ := json.Marshal(p.Pools)
+		beforeSLI, _ := json.Marshal(p.BeforeSLI)
+		if _, err = tx.Exec(ctx, `INSERT INTO engine_actions(id,plan_id,account_id,owner_id,source_generation,config_generation,control_scope,before_values,after_values,pools,before_sli,window_seconds) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, uuid.NewString(), p.PlanID, w.ID, w.OwnerID, w.SourceGeneration, w.ConfigGeneration, controlScope(w), from, to, pools, beforeSLI, p.EffectWindow); err != nil {
+			return err
 		}
 	}
 	if !p.ControlsSettled {

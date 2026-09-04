@@ -1,0 +1,21 @@
+{
+  "id": 7,
+  "name": "Synthetic API-key contract",
+  "platform": "openai",
+  "type": "apikey",
+  "status": "active",
+  "schedulable": true,
+  "priority": 20,
+  "concurrency": 8,
+  "load_factor": 16,
+  "proxy_id": null,
+  "credentials": {"base_url": "https://supplier.example.test", "model_mapping": {"public-alias": "provider-model"}},
+  "credentials_status": {"has_api_key": true},
+  "extra": {},
+  "expires_at": null,
+  "auto_pause_on_expired": true,
+  "rate_limit_reset_at": null,
+  "overload_until": null,
+  "temp_unschedulable_until": null,
+  "account_groups": [{"group_id": 1}]
+}

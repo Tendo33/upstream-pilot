@@ -18,8 +18,11 @@ type Scheduler struct {
 }
 
 type scheduledTask struct {
-	Kind string
-	ID   string
+	Resource   string
+	RunID      string
+	LeaseToken string
+	Kind       string
+	ID         string
 }
 
 func (a *App) NewScheduler() *Scheduler {
@@ -78,76 +81,7 @@ func (s *Scheduler) fill(ctx context.Context) {
 	}
 }
 
-func (s *Scheduler) claim(ctx context.Context) (scheduledTask, error) {
-	// Inventory keeps the local mirror authoritative before account-level work.
-	var task scheduledTask
-	err := s.app.db.QueryRow(ctx, `
-		WITH candidate AS (
-		 SELECT id FROM sites WHERE enabled AND next_inventory_at<=now() AND (inventory_lease_until IS NULL OR inventory_lease_until<now())
-		 ORDER BY next_inventory_at FOR UPDATE SKIP LOCKED LIMIT 1
-		)
-		UPDATE sites s SET inventory_lease_until=now()+interval '2 minutes' FROM candidate c WHERE s.id=c.id RETURNING s.id`,
-	).Scan(&task.ID)
-	if err == nil {
-		task.Kind = "inventory"
-		return task, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return task, err
-	}
-
-	err = s.app.db.QueryRow(ctx, `
-		WITH candidate AS (
-		 SELECT id FROM sites WHERE enabled AND cache_rate_priority_enabled AND next_cache_sample_at<=now() AND (cache_sample_lease_until IS NULL OR cache_sample_lease_until<now())
-		 ORDER BY next_cache_sample_at FOR UPDATE SKIP LOCKED LIMIT 1
-		)
-		UPDATE sites s SET cache_sample_lease_until=now()+interval '2 minutes' FROM candidate c WHERE s.id=c.id RETURNING s.id`,
-	).Scan(&task.ID)
-	if err == nil {
-		task.Kind = "cache-sample"
-		return task, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return task, err
-	}
-
-	err = s.app.db.QueryRow(ctx, `
-		WITH candidate AS (
-		 SELECT id FROM sites WHERE enabled AND next_reconcile_at<=now() AND (reconcile_lease_until IS NULL OR reconcile_lease_until<now())
-		 ORDER BY next_reconcile_at FOR UPDATE SKIP LOCKED LIMIT 1
-		)
-		UPDATE sites s SET reconcile_lease_until=now()+interval '2 minutes' FROM candidate c WHERE s.id=c.id RETURNING s.id`,
-	).Scan(&task.ID)
-	if err == nil {
-		task.Kind = "reconcile"
-		return task, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return task, err
-	}
-
-	// Traffic, probe and price work share a due-time queue. Separate leases let
-	// real traffic collection run during a long probe without starving probes.
-	err = s.app.db.QueryRow(ctx, `
- WITH candidate AS (
-  SELECT a.id,task.kind FROM upstream_accounts a JOIN sites s ON s.id=a.site_id
-  CROSS JOIN LATERAL (VALUES
-   ('traffic',a.next_traffic_at,true,a.traffic_lease_until),
-   ('probe',a.next_probe_at,a.health_enabled OR a.managed_hold,a.work_lease_until),
-   ('rate',a.next_rate_sync_at,a.rate_sync_enabled,a.work_lease_until)
-  ) task(kind,due,enabled,lease)
-  WHERE s.enabled AND a.deleted_at IS NULL AND task.enabled AND task.due<=now() AND (task.lease IS NULL OR task.lease<now())
-  ORDER BY task.due,task.kind,a.id FOR UPDATE OF a SKIP LOCKED LIMIT 1
- )
- UPDATE upstream_accounts a SET
-  traffic_lease_until=CASE WHEN c.kind='traffic' THEN now()+interval '30 seconds' ELSE a.traffic_lease_until END,
-  work_lease_until=CASE WHEN c.kind<>'traffic' THEN now()+interval '12 minutes' ELSE a.work_lease_until END
- FROM candidate c WHERE a.id=c.id RETURNING a.id,c.kind`).Scan(&task.ID, &task.Kind)
-
-	return task, err
-}
-
-func (s *Scheduler) execute(ctx context.Context, task scheduledTask) {
+func (s *Scheduler) executeTask(ctx context.Context, task scheduledTask) error {
 	var err error
 	switch task.Kind {
 	case "inventory":
@@ -162,6 +96,15 @@ func (s *Scheduler) execute(ctx context.Context, task scheduledTask) {
 		}
 	case "reconcile":
 		_, err = s.app.reconcileSite(ctx, task.ID, "", "")
+	case "service-canary":
+		_, err = s.app.runServiceCanary(ctx, task.ID, "", true, task.LeaseToken)
+		_, updateErr := s.app.db.Exec(ctx, `UPDATE service_profiles SET lease_until=NULL,lease_token=NULL,next_probe_at=GREATEST(next_probe_at,now()+interval '60 seconds') WHERE id=$1 AND lease_token=$2::uuid`, task.ID, task.LeaseToken)
+		err = errors.Join(err, updateErr)
+	case "usage":
+		err = s.app.collectSiteUsage(ctx, task.ID, "")
+		_, _ = s.app.db.Exec(ctx, `UPDATE sites SET usage_lease_until=NULL,next_usage_at=now()+interval '5 minutes' WHERE id=$1`, task.ID)
+	case "traffic-site":
+		err = s.app.collectSiteTraffic(ctx, task.ID, "")
 	case "traffic":
 		var work AccountWork
 		work, err = s.app.loadAccountWork(ctx, task.ID, "")
@@ -187,12 +130,13 @@ func (s *Scheduler) execute(ctx context.Context, task scheduledTask) {
 			if task.Kind == "rate" {
 				column, intervalColumn = "next_rate_sync_at", "rate_sync_interval_seconds"
 			}
-			_, _ = s.app.db.Exec(ctx, `UPDATE upstream_accounts SET work_lease_until=NULL,`+column+`=now()+`+intervalColumn+`*interval '1 second',last_error=$2,updated_at=now() WHERE id=$1`, task.ID, truncateError(err))
+			_, _ = s.app.db.Exec(ctx, `UPDATE upstream_accounts SET work_lease_until=NULL,`+column+`=now()+`+intervalColumn+`*interval '1 second',last_error=$2,updated_at=now() WHERE id=$1 AND source_generation=$3`, task.ID, truncateError(err), work.SourceGeneration)
 		}
 	}
 	if err != nil && ctx.Err() == nil {
 		s.app.logger.Warn("scheduled task failed", slog.String("kind", task.Kind), slog.String("id", task.ID), slog.Any("error", err))
 	}
+	return err
 }
 
 func (s *Scheduler) cleanup(ctx context.Context) {
@@ -202,6 +146,10 @@ func (s *Scheduler) cleanup(ctx context.Context) {
 	_, _ = s.app.db.Exec(ctx, `DELETE FROM quality_notifications WHERE created_at<now()-interval '90 days'`)
 	_, _ = s.app.db.Exec(ctx, `DELETE FROM account_cache_samples WHERE sampled_at<now()-interval '48 hours'`)
 	_, _ = s.app.db.Exec(ctx, `DELETE FROM auth_throttles WHERE updated_at<now()-interval '24 hours'`)
+	_, _ = s.app.db.Exec(ctx, `DELETE FROM service_canary_runs WHERE started_at<now()-interval '90 days'`)
+	_, _ = s.app.db.Exec(ctx, `DELETE FROM balance_observations WHERE checked_at<now()-interval '90 days'`)
+	_, _ = s.app.db.Exec(ctx, `DELETE FROM usage_observations WHERE created_at<now()-interval '7 days'`)
+	_, _ = s.app.db.Exec(ctx, `DELETE FROM request_outcome_observations WHERE seen_at<now()-interval '7 days'`)
 	s.purgeAuditLogs(ctx)
 }
 

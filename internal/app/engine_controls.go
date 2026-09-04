@@ -80,7 +80,8 @@ func (a *App) applyEngineControls(ctx context.Context, p *engineWork, works []en
 	var b, c, i []byte
 	var pendingPriority *int
 	var pendingSince *time.Time
-	if err = a.db.QueryRow(ctx, `SELECT baseline_control,applied_control,pending_control,pending_priority,pending_since FROM quality_states WHERE account_id=$1`, w.ID).Scan(&b, &c, &i, &pendingPriority, &pendingSince); err != nil {
+	var ownedScope string
+	if err = a.db.QueryRow(ctx, `SELECT baseline_control,applied_control,pending_control,pending_priority,pending_since,control_scope FROM quality_states WHERE account_id=$1`, w.ID).Scan(&b, &c, &i, &pendingPriority, &pendingSince, &ownedScope); err != nil {
 		return before, false, err
 	}
 	if err = json.Unmarshal(b, &baseline); err != nil {
@@ -112,6 +113,9 @@ func (a *App) applyEngineControls(ctx context.Context, p *engineWork, works []en
 		s.Reason = fmt.Sprintf("上游 %s 已被人工或其他工具修改，停止自动覆盖", k)
 		return before, false, nil
 	}
+	if ownedScope != "" && ownedScope != controlScope(w) {
+		return conflict("管理目标地址已变化；不能沿用旧站点的控制所有权")
+	}
 	if len(pending.To) > 0 && pending.ControlScope != "" && pending.ControlScope != controlScope(w) {
 		return conflict("控制目标站点已变化；旧意图无法在新站点确认")
 	}
@@ -142,6 +146,10 @@ func (a *App) applyEngineControls(ctx context.Context, p *engineWork, works []en
 		// Settle observed side effects and cancel only unapplied parts in one local
 		// transaction before replacing an old intent. Never blindly replay it.
 		checkpoint := *p
+		checkpoint.SettledIntent = &pending
+		if pending.PlanID != "" {
+			checkpoint.PlanID = pending.PlanID
+		}
 		checkpoint.Decision = quality.Decision{State: p.Old}
 		checkpoint.AppliedControl = applied
 		checkpoint.ControlsSettled = true
@@ -153,7 +161,7 @@ func (a *App) applyEngineControls(ctx context.Context, p *engineWork, works []en
 		p.Old = checkpoint.Decision.State
 		recordOwnedControls(p, applied)
 	}
-	if p.Policy.Mode != "priority" || s.Status == "unknown" || s.PlanError != "" || statusText(remote.Status) != "active" {
+	if p.ControlsSuppressed || p.Policy.Mode != "priority" || s.Status == "unknown" || s.PlanError != "" || statusText(remote.Status) != "active" {
 		return before, false, nil
 	}
 	if err = a.requireCurrentEvidence(ctx, p); err != nil {
@@ -199,6 +207,15 @@ func (a *App) applyEngineControls(ctx context.Context, p *engineWork, works []en
 	if len(intent.To) == 0 {
 		return before, false, nil
 	}
+	if p.EffectWindow < 60 {
+		p.EffectWindow = quality.DefaultGroupPolicy().EffectWindowSeconds
+	}
+	p.ActionBefore = intent.From
+	p.ActionAfter = intent.To
+	p.BeforeSLI, err = a.capturePoolSLI(ctx, p.Pools, time.Now().Add(-time.Duration(p.EffectWindow)*time.Second), time.Now())
+	if err != nil {
+		return before, false, err
+	}
 	if pending.SourceGeneration != w.SourceGeneration || !reflect.DeepEqual(pending.To, intent.To) {
 		pendingSince = nil
 	}
@@ -208,8 +225,12 @@ func (a *App) applyEngineControls(ctx context.Context, p *engineWork, works []en
 	if v, ok := intent.To["priority"]; ok {
 		priority = int(v.(float64))
 	}
-	if _, err = a.db.Exec(ctx, `UPDATE quality_states SET pending_control=$2,pending_since=COALESCE($5,now()),baseline_control=$3,pending_priority=$4 WHERE account_id=$1`, w.ID, raw, baseRaw, priority, pendingSince); err != nil {
+	command, err := a.db.Exec(ctx, `UPDATE quality_states SET pending_control=$2,pending_since=COALESCE($5,now()),baseline_control=$3,pending_priority=$4,control_scope=$6 WHERE account_id=$1`, w.ID, raw, baseRaw, priority, pendingSince, controlScope(w))
+	if err != nil {
 		return before, false, err
+	}
+	if command.RowsAffected() != 1 {
+		return before, false, errEngineReplan
 	}
 	// Account reads and backup checks may take time. Recheck the whole dependent
 	// component at the action boundary, not only at the beginning of the cycle.
@@ -223,6 +244,9 @@ func (a *App) applyEngineControls(ctx context.Context, p *engineWork, works []en
 		}
 	}
 	if len(fields) > 0 {
+		if err = a.requireCurrentEvidence(ctx, p); err != nil {
+			return before, false, err
+		}
 		if _, err = client.UpdateCapacity(ctx, w.RemoteID, fields); err != nil {
 			return before, false, err
 		}
@@ -298,6 +322,12 @@ func (a *App) verifyBackups(ctx context.Context, target engineWork, works []engi
 		}
 		p.Work.Schedulable = remote.Schedulable
 		p.Work.RemoteStatus = statusText(remote.Status)
+		p.Work.Platform = remote.Platform
+		p.Work.AccountType = remote.Type
+		if err = a.recordNativeObservation(ctx, p.Work, remote); err != nil {
+			p.Decision.Eligible = false
+			continue
+		}
 		p.Work.NativeConstraints = remote.Native
 		checkedAt := time.Now().UTC()
 		p.Work.NativeCheckedAt = &checkedAt
@@ -322,6 +352,13 @@ func (a *App) verifyBackups(ctx context.Context, target engineWork, works []engi
 }
 
 func (a *App) restoreEngineControls(ctx context.Context, w AccountWork, s quality.State, client *upstream.Sub2Client, remote upstream.Sub2Account) (upstream.Sub2Account, error) {
+	var ownedScope string
+	if err := a.db.QueryRow(ctx, `SELECT control_scope FROM quality_states WHERE account_id=$1`, w.ID).Scan(&ownedScope); err != nil {
+		return remote, err
+	}
+	if ownedScope != "" && ownedScope != controlScope(w) {
+		return remote, &apiError{Status: 409, Code: "CONTROL_SCOPE_CHANGED", Message: "管理站点地址已变化，不能把旧站点的基准还原到这里；请选择保留当前值并停止"}
+	}
 	var b, c, i []byte
 	var pendingPriority *int
 	if err := a.db.QueryRow(ctx, `SELECT baseline_control,applied_control,pending_control,pending_priority FROM quality_states WHERE account_id=$1`, w.ID).Scan(&b, &c, &i, &pendingPriority); err != nil {
@@ -347,7 +384,7 @@ func (a *App) restoreEngineControls(ctx context.Context, w AccountWork, s qualit
 		intent.To = map[string]any{"priority": float64(*pendingPriority)}
 	}
 	current := remoteControls(remote)
-	restore := controlIntent{From: map[string]any{}, To: map[string]any{}}
+	restore := controlIntent{ControlScope: controlScope(w), SourceGeneration: w.SourceGeneration, ConfigGeneration: w.ConfigGeneration, From: map[string]any{}, To: map[string]any{}}
 	for k, base := range baseline {
 		if k == "schedulable" {
 			continue
@@ -372,8 +409,12 @@ func (a *App) restoreEngineControls(ctx context.Context, w AccountWork, s qualit
 		return remote, nil
 	}
 	raw, _ := json.Marshal(restore)
-	if _, err := a.db.Exec(ctx, `UPDATE quality_states SET pending_control=$2,pending_since=COALESCE(pending_since,now()),pending_priority=$3 WHERE account_id=$1`, w.ID, raw, s.Baseline); err != nil {
+	command, err := a.db.Exec(ctx, `UPDATE quality_states q SET pending_control=$2,pending_since=COALESCE(pending_since,now()),pending_priority=$3,control_scope=$5 FROM upstream_accounts a WHERE q.account_id=$1 AND a.id=q.account_id AND a.source_generation=$4`, w.ID, raw, s.Baseline, w.SourceGeneration, controlScope(w))
+	if err != nil {
 		return remote, err
+	}
+	if command.RowsAffected() != 1 {
+		return remote, errEngineReplan
 	}
 	if _, err := client.UpdateCapacity(ctx, w.RemoteID, restore.To); err != nil {
 		return remote, err

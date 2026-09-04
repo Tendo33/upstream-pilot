@@ -14,6 +14,9 @@ import (
 )
 
 type qualityAccountView struct {
+	SamplingWarnings   []string                  `json:"sampling_warnings"`
+	Costs              map[string]ComparableCost `json:"costs"`
+	Capacity           CapacityView              `json:"capacity"`
 	ControllerError    string                    `json:"controller_error"`
 	PendingSince       *time.Time                `json:"pending_since"`
 	Native             upstream.NativeAssessment `json:"native"`
@@ -104,6 +107,7 @@ func (a *App) qualityView(ctx context.Context, id, owner string) (qualityAccount
 	if err != nil {
 		return v, err
 	}
+	v.SamplingWarnings = samplingWarnings(work, v.Policy.MinimumSamples, v.Policy.WindowSeconds, v.Policy.FreshSeconds, v.Policy.LowBalance != nil, v.Policy.MaxRate != nil || v.Policy.PriceRisePercent > 0)
 	// Read-only views never create or advance control state.
 	v.State, _, err = a.readQualityState(ctx, work)
 	if err != nil {
@@ -127,6 +131,7 @@ func (a *App) qualityView(ctx context.Context, id, owner string) (qualityAccount
 	v.Samples = decision.Count
 	v.SuccessPercent = decision.SuccessPercent
 	v.Native = assessWorkNative(work, nil, time.Now().UTC())
+	v.Capacity = capacityView(work, time.Now().UTC())
 	v.Eligible = v.Native.State == "eligible" && decision.Eligible && !v.State.Conflict && v.State.PlanError == "" && work.RemoteStatus == "active" && work.Schedulable
 	// Current evidence is shown separately from the last committed decision time.
 	evaluated := v.State.EvaluatedAt
@@ -134,6 +139,19 @@ func (a *App) qualityView(ctx context.Context, id, owner string) (qualityAccount
 	v.State = decision.State
 	v.State.EvaluatedAt = evaluated
 	v.State.Desired = desired
+	v.Costs = map[string]ComparableCost{}
+	var costsRaw []byte
+	if e := a.db.QueryRow(ctx, `SELECT COALESCE(plan->'costs'->$2,'{}'::jsonb) FROM engine_plans WHERE site_id=$1`, work.SiteID, id).Scan(&costsRaw); e == nil {
+		_ = json.Unmarshal(costsRaw, &v.Costs)
+		for pool, c := range v.Costs {
+			if c.SourceGeneration != work.SourceGeneration || c.ValidUntil == nil || time.Now().After(*c.ValidUntil) {
+				c.Status = "unknown"
+				c.USDPerMillion = nil
+				c.Reason = "当前来源成本证据未确认或已过期"
+				v.Costs[pool] = c
+			}
+		}
+	}
 	v.ReferenceRate = snapshot.ReferenceRate
 	v.Balance = snapshot.Balance
 	v.BalanceFresh = snapshot.BalanceFresh
@@ -312,7 +330,7 @@ func (a *App) qualityReleaseHandler(w http.ResponseWriter, r *http.Request) erro
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE quality_states SET baseline_priority=$2,desired_priority=$2,last_applied_priority=NULL,pending_priority=NULL,conflict=false,tier=0,recovery_streak=0,owned_pause=false,risks='[]',plan_error='',baseline_control='{}',applied_control='{}',pending_control='{}',status='unknown',reason='已停止接管，当前优先级作为新基准',evaluated_at=now() WHERE account_id=$1`, id, remote.Priority)
+		_, err = tx.Exec(ctx, `UPDATE quality_states SET baseline_priority=$2,desired_priority=$2,last_applied_priority=NULL,pending_priority=NULL,conflict=false,tier=0,recovery_streak=0,owned_pause=false,risks='[]',plan_error='',baseline_control='{}',applied_control='{}',pending_control='{}',control_scope='',pending_since=NULL,controller_error='',controller_error_at=NULL,status='unknown',reason='已停止接管，当前优先级作为新基准',evaluated_at=now() WHERE account_id=$1`, id, remote.Priority)
 		if err != nil {
 			return err
 		}
@@ -343,7 +361,7 @@ func (a *App) qualityHistoryHandler(w http.ResponseWriter, r *http.Request) erro
 	queries := map[string]string{
 		"probes":    `SELECT COALESCE(jsonb_agg(v),'[]') FROM(SELECT source_generation,created_at,success,first_content_ms,duration_ms,model,actual_model,stream_complete,failure_reason,http_status,message FROM probe_attempts WHERE account_id=$1 ORDER BY created_at DESC LIMIT 100)v`,
 		"prices":    `SELECT COALESCE(jsonb_agg(v),'[]') FROM(SELECT source_generation,source_rate,effective_rate,checked_at FROM upstream_price_history WHERE account_id=$1 ORDER BY checked_at DESC LIMIT 100)v`,
-		"decisions": `SELECT COALESCE(jsonb_agg(v),'[]') FROM(SELECT mode,status,reason,before_priority,desired_priority,applied,error,created_at FROM quality_decisions WHERE account_id=$1 ORDER BY created_at DESC LIMIT 100)v`,
+		"decisions": `SELECT COALESCE(jsonb_agg(v),'[]') FROM(SELECT mode,status,reason,before_priority,desired_priority,applied,error,detail,created_at FROM quality_decisions WHERE account_id=$1 ORDER BY created_at DESC LIMIT 100)v`,
 	}
 	for name, query := range queries {
 		var raw []byte

@@ -792,6 +792,9 @@ func newProbePersistenceContext(ctx context.Context) (context.Context, context.C
 }
 
 func (a *App) runProbe(ctx context.Context, work AccountWork, kind, actorID string) (probeOutcome, error) {
+	if err := a.requireTaskLease(ctx); err != nil {
+		return probeOutcome{}, err
+	}
 	token, err := a.beginProbe(ctx, work.ID)
 	if err != nil {
 		return probeOutcome{}, err
@@ -816,6 +819,9 @@ func (a *App) runProbe(ctx context.Context, work AccountWork, kind, actorID stri
 		result.Success = false
 		result.Message = probeErr.Error()
 		result.LatencyMS = latency
+	}
+	if ctx.Err() != nil {
+		result.ControlPlaneError = true
 	}
 	var classification *health.Classification
 	if !result.Success {
@@ -854,7 +860,7 @@ func (a *App) runProbe(ctx context.Context, work AccountWork, kind, actorID stri
 		return outcome, err
 	}
 
-	_, err = a.db.Exec(persistenceCtx, `UPDATE upstream_accounts SET health_state=$2,last_probe_at=now(),last_probe_latency_ms=$3,last_success_at=CASE WHEN $4 THEN now() ELSE last_success_at END,last_failure_at=CASE WHEN NOT $4 THEN now() ELSE last_failure_at END,last_failure_reason=$5,last_failure_http_status=$6,last_error=CASE WHEN $4 THEN NULL ELSE $7 END,consecutive_failures=CASE WHEN $4 THEN 0 ELSE consecutive_failures+1 END,next_probe_at=now()+probe_interval_seconds*interval '1 second',applied_probe_sequence=$8 WHERE id=$1 AND applied_probe_sequence<$8 AND scheduling_generation=$9 AND source_generation=$10`, work.ID, map[bool]string{true: "healthy", false: "failing"}[result.Success], latency, result.Success, failureReason, failureHTTPStatus, result.Message, token.Sequence, token.SchedulingGeneration, work.SourceGeneration)
+	_, err = a.db.Exec(persistenceCtx, `UPDATE upstream_accounts SET health_state=$2,last_probe_at=now(),last_probe_latency_ms=$3,last_success_at=CASE WHEN $4 THEN now() ELSE last_success_at END,last_failure_at=CASE WHEN NOT $4 THEN now() ELSE last_failure_at END,last_failure_reason=$5,last_failure_http_status=$6,last_error=CASE WHEN $4 THEN NULL ELSE $7 END,consecutive_failures=CASE WHEN $4 THEN 0 ELSE consecutive_failures+1 END,next_probe_at=now()+probe_interval_seconds*interval '1 second',applied_probe_sequence=$8 WHERE id=$1 AND applied_probe_sequence<$8 AND scheduling_generation=$9 AND source_generation=$10 AND NOT $11`, work.ID, map[bool]string{true: "healthy", false: "failing"}[result.Success], latency, result.Success, failureReason, failureHTTPStatus, result.Message, token.Sequence, token.SchedulingGeneration, work.SourceGeneration, result.ControlPlaneError)
 	if err != nil {
 		return outcome, err
 	}

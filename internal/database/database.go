@@ -7,10 +7,43 @@ import (
 	"io/fs"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type queryMetrics struct {
+	count  atomic.Uint64
+	errors atomic.Uint64
+}
+
+func (m *queryMetrics) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	m.count.Add(1)
+	return ctx
+}
+func (m *queryMetrics) TraceQueryEnd(_ context.Context, _ *pgx.Conn, d pgx.TraceQueryEndData) {
+	if d.Err != nil {
+		m.errors.Add(1)
+	}
+}
+
+type QueryMetrics struct {
+	Count  uint64 `json:"count"`
+	Errors uint64 `json:"errors"`
+}
+
+func Metrics(pool *pgxpool.Pool) QueryMetrics {
+	if pool == nil {
+		return QueryMetrics{}
+	}
+	m, ok := pool.Config().ConnConfig.Tracer.(*queryMetrics)
+	if !ok {
+		return QueryMetrics{}
+	}
+	return QueryMetrics{m.count.Load(), m.errors.Load()}
+}
 
 //go:embed migrations/*.sql
 var migrationFS embed.FS
@@ -25,6 +58,7 @@ func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	config.MaxConnLifetime = time.Hour
 	config.MaxConnIdleTime = 15 * time.Minute
 	config.HealthCheckPeriod = 30 * time.Second
+	config.ConnConfig.Tracer = &queryMetrics{}
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)

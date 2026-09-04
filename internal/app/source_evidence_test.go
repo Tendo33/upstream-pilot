@@ -131,6 +131,47 @@ func TestCollectorIncidentsAndPendingAge(t *testing.T) {
 	}
 }
 
+func TestAppliedControlsCannotMoveToAnotherSiteAddress(t *testing.T) {
+	a, w, remote, _ := newQualityIntegration(t)
+	ctx := context.Background()
+	p := quality.DefaultPolicy()
+	p.Mode = "priority"
+	setTestQualityPolicy(t, a, w.ID, p)
+	seedEngineSamples(t, a, w, w.ID, 5, false, 100, 0)
+	if _, err := a.evaluateQuality(ctx, w, w.OwnerID); err != nil {
+		t.Fatal(err)
+	}
+	writes := len(remote.writes)
+	if writes == 0 {
+		t.Fatal("no applied control in setup")
+	}
+	other := httptest.NewServer(http.HandlerFunc(remote.serve))
+	defer other.Close()
+	engineRegressionSQL(t, a, `UPDATE sites SET base_url=$2 WHERE id=$1`, w.SiteID, other.URL)
+	d, err := a.evaluateQuality(ctx, w, w.OwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.State.Conflict || len(remote.writes) != writes {
+		t.Fatal("old ownership used on new target")
+	}
+	fresh, err := a.loadAccountWork(ctx, w.ID, w.OwnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := a.clientForWork(fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := client.GetAccount(ctx, w.RemoteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.restoreEngineControls(ctx, fresh, d.State, client, current); err == nil {
+		t.Fatal("old baseline restored on new target")
+	}
+}
+
 func TestSourceGenerationChangesOnlyWithIdentity(t *testing.T) {
 	a, w, _, _ := newQualityIntegration(t)
 	ctx := context.Background()

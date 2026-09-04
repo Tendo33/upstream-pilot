@@ -4,7 +4,7 @@ import "testing"
 
 func TestLogDirectoryConfiguration(t *testing.T) {
 	t.Setenv("PILOT_DATABASE_URL", "postgres://localhost/pilot")
-	t.Setenv("PILOT_MASTER_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	t.Setenv("PILOT_MASTER_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=") // gitleaks:allow -- deterministic fixture
 	t.Setenv("PILOT_LOG_DIR", "")
 	defaultConfig, err := Load()
 	if err != nil {

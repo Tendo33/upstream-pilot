@@ -10,6 +10,10 @@ import (
 // NativeConstraints contains only routing metadata; never persist credentials
 // or the arbitrary extra object returned by an administration endpoint.
 type NativeConstraints struct {
+	QuotaResetAt       *time.Time        `json:"quota_reset_at"`
+	CurrentConcurrency *int              `json:"current_concurrency"`
+	QueueDepth         *int              `json:"queue_depth"`
+	CapacityVerified   bool              `json:"capacity_verified"`
 	Known              bool              `json:"known"`
 	GroupsKnown        bool              `json:"groups_known"`
 	Groups             []int64           `json:"groups"`
@@ -35,6 +39,11 @@ func parseNativeConstraints(data []byte, a Sub2Account) NativeConstraints {
 	var raw map[string]json.RawMessage
 	_ = json.Unmarshal(data, &raw)
 	n := NativeConstraints{Known: true, Concurrency: a.Concurrency}
+	_ = json.Unmarshal(raw["current_concurrency"], &n.CurrentConcurrency)
+	_ = json.Unmarshal(raw["queue_depth"], &n.QueueDepth)
+	var capacityStatus string
+	_ = json.Unmarshal(raw["concurrency_status"], &capacityStatus)
+	n.CapacityVerified = capacityStatus == "ok" && n.CurrentConcurrency != nil && *n.CurrentConcurrency >= 0 && n.QueueDepth != nil && *n.QueueDepth >= 0
 	for _, key := range []string{"rate_limit_reset_at", "overload_until", "temp_unschedulable_until", "expires_at", "auto_pause_on_expired", "extra", "type", "platform", "status", "schedulable"} {
 		if _, ok := raw[key]; !ok {
 			n.Known = false
@@ -62,6 +71,14 @@ func parseNativeConstraints(data []byte, a Sub2Account) NativeConstraints {
 		if m, ok := credentials["model_mapping"]; ok && string(m) != "null" {
 			if json.Unmarshal(m, &n.Mapping) != nil {
 				n.MappingKnown = false
+			}
+		}
+	}
+	for _, key := range []string{"quota_daily_reset_at", "quota_weekly_reset_at"} {
+		var v string
+		if json.Unmarshal(raw[key], &v) == nil {
+			if at, e := time.Parse(time.RFC3339, v); e == nil && time.Now().Before(at) && (n.QuotaResetAt == nil || at.Before(*n.QuotaResetAt)) {
+				n.QuotaResetAt = &at
 			}
 		}
 	}
@@ -119,6 +136,12 @@ func (a Sub2Account) NativeEligibility(model string, groups []int64, now time.Ti
 	}
 	if n.AutoPauseOnExpired && n.ExpiresAt != nil && now.Unix() >= *n.ExpiresAt {
 		return blocked("账号已过期")
+	}
+	if n.Concurrency != nil && n.CurrentConcurrency != nil && *n.CurrentConcurrency >= *n.Concurrency {
+		return blocked("原生并发上限已占满")
+	}
+	if n.QueueDepth != nil && *n.QueueDepth > 0 {
+		return blocked("原生请求已有排队")
 	}
 	if n.QuotaExceeded {
 		return blocked("原生额度已用尽，等待确认重置")

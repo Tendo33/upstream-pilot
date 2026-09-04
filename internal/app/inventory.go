@@ -15,6 +15,8 @@ import (
 )
 
 func (a *App) syncSite(ctx context.Context, siteID, ownerFilter, actorID, mode string) error {
+	ctx, cancelCycle := context.WithTimeout(ctx, 110*time.Second)
+	defer cancelCycle()
 	return a.withSiteSchedulingLock(ctx, siteID, func(_ *pgxpool.Conn) error { return a.syncSiteLocked(ctx, siteID, ownerFilter, actorID, mode) })
 }
 func (a *App) syncSiteLocked(ctx context.Context, siteID, ownerFilter, actorID, mode string) error {
@@ -144,6 +146,13 @@ func (a *App) syncSiteLocked(ctx context.Context, siteID, ownerFilter, actorID, 
 		return err
 	}
 	version := client.Version(requestCtx)
+	capabilities, err := json.Marshal(upstream.InventoryCapabilities(version, accounts))
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE sites SET capabilities=$2 WHERE id=$1`, siteID, capabilities); err != nil {
+		return err
+	}
 	_, err = tx.Exec(ctx, `UPDATE sites SET connection_state='healthy',last_error=NULL,version_hint=COALESCE(NULLIF($2,''),version_hint),last_inventory_at=now(),next_inventory_at=now()+inventory_interval_seconds*interval '1 second',inventory_lease_until=NULL,updated_at=now() WHERE id=$1`, siteID, version)
 	if err != nil {
 		return err

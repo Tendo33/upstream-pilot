@@ -99,10 +99,11 @@ type Risk struct {
 }
 
 type State struct {
-	Risks        []Risk     `json:"risks"`
-	EvaluatedAt  *time.Time `json:"evaluated_at"`
-	PlanError    string     `json:"plan_error"`
-	PlanStrategy string     `json:"plan_strategy"`
+	LastControlAppliedAt *time.Time `json:"last_control_applied_at"`
+	Risks                []Risk     `json:"risks"`
+	EvaluatedAt          *time.Time `json:"evaluated_at"`
+	PlanError            string     `json:"plan_error"`
+	PlanStrategy         string     `json:"plan_strategy"`
 
 	Baseline       int        `json:"baseline_priority"`
 	LastApplied    *int       `json:"last_applied_priority"`

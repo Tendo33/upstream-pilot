@@ -15,14 +15,27 @@ const (
 )
 
 type GroupPolicy struct {
-	Strategy       Strategy `json:"strategy"`
-	PriceWeight    float64  `json:"price_weight"`
-	SpeedWeight    float64  `json:"speed_weight"`
-	MinimumHealthy int      `json:"minimum_healthy"`
+	MinimumSpareSlots   int      `json:"minimum_spare_slots"`
+	MinLatencyMS        int      `json:"min_latency_improvement_ms"`
+	MinLatencyPercent   float64  `json:"min_latency_improvement_percent"`
+	MinPricePercent     float64  `json:"min_price_improvement_percent"`
+	HoldSeconds         int      `json:"hold_seconds"`
+	MaxChanges          int      `json:"max_changes_per_cycle"`
+	RolloutPercent      int      `json:"rollout_percent"`
+	EffectWindowSeconds int      `json:"effect_window_seconds"`
+	Strategy            Strategy `json:"strategy"`
+	PriceWeight         float64  `json:"price_weight"`
+	SpeedWeight         float64  `json:"speed_weight"`
+	MinimumHealthy      int      `json:"minimum_healthy"`
 }
 
-func DefaultGroupPolicy() GroupPolicy { return GroupPolicy{Balanced, 1, 1, 1} }
+func DefaultGroupPolicy() GroupPolicy {
+	return GroupPolicy{Strategy: Balanced, PriceWeight: 1, SpeedWeight: 1, MinimumHealthy: 1, MinLatencyMS: 250, MinLatencyPercent: 10, MinPricePercent: 5, HoldSeconds: 300, MaxChanges: 10, RolloutPercent: 100, EffectWindowSeconds: 600}
+}
 func (p GroupPolicy) Validate() error {
+	if p.MinimumSpareSlots < 0 || p.MinimumSpareSlots > 100000 || p.MinLatencyMS < 0 || p.MinLatencyMS > 600000 || !finite(p.MinLatencyPercent) || p.MinLatencyPercent < 0 || p.MinLatencyPercent > 100 || !finite(p.MinPricePercent) || p.MinPricePercent < 0 || p.MinPricePercent > 100 || p.HoldSeconds < 0 || p.HoldSeconds > 86400 || p.MaxChanges < 1 || p.MaxChanges > 1000 || p.RolloutPercent < 0 || p.RolloutPercent > 100 || p.EffectWindowSeconds < 60 || p.EffectWindowSeconds > 86400 {
+		return fmt.Errorf("防抖、灰度范围或效果窗口设置无效")
+	}
 	if p.Strategy != PriceFirst && p.Strategy != SpeedFirst && p.Strategy != Balanced {
 		return fmt.Errorf("未知调度策略")
 	}
@@ -33,6 +46,10 @@ func (p GroupPolicy) Validate() error {
 }
 
 type Candidate struct {
+	PriceBasis                       string
+	PoolPrices                       map[string]*float64
+	PoolPriceBases                   map[string]string
+	RiskWorsened                     bool
 	ID                               string
 	Pools                            []string
 	Baseline, Current, Desired, Tier int
@@ -76,6 +93,30 @@ func Plan(input []Candidate, policies map[string]GroupPolicy) map[string]Assignm
 		}
 	}
 	for pool, members := range pools {
+		members = append([]Candidate(nil), members...)
+		common := ""
+		comparable := true
+		for i := range members {
+			n := &members[i]
+			if n.PoolPrices != nil {
+				n.Price = n.PoolPrices[pool]
+				n.PriceBasis = n.PoolPriceBases[pool]
+			}
+			if n.Price == nil || n.PriceBasis == "" {
+				comparable = false
+			}
+			if common == "" {
+				common = n.PriceBasis
+			} else if common != n.PriceBasis {
+				comparable = false
+			}
+		}
+		if !comparable {
+			for i := range members {
+				members[i].Price = nil
+			}
+		}
+
 		policy, ok := policies[pool]
 		if !ok {
 			policy = DefaultGroupPolicy()
@@ -121,6 +162,15 @@ func Plan(input []Candidate, policies map[string]GroupPolicy) map[string]Assignm
 							cmp = -1
 						} else {
 							cmp = 1
+						}
+					}
+					if cmp != 0 {
+						better, worse := a, b
+						if cmp > 0 {
+							better, worse = b, a
+						}
+						if !materialImprovement(better, worse, policy) {
+							cmp = comparePriority(a.Current, b.Current)
 						}
 					}
 				}
@@ -169,6 +219,9 @@ func Plan(input []Candidate, policies map[string]GroupPolicy) map[string]Assignm
 			n := byID[id]
 			start = min(start, n.Baseline)
 			upper[id] = 1000000
+			if n.Mutable && n.Tier > 0 && n.RiskWorsened {
+				lower[id] = n.Current
+			}
 			if !n.Mutable {
 				lower[id] = n.Current
 				upper[id] = n.Current
@@ -236,6 +289,37 @@ func Plan(input []Candidate, policies map[string]GroupPolicy) map[string]Assignm
 		}
 	}
 	return result
+}
+
+func comparePriority(a, b int) int {
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
+}
+
+// Compare raw units, not normalized scores: a 1 ms difference must not become
+// a full-scale improvement merely because a pool has just two candidates.
+func materialImprovement(better, worse Candidate, p GroupPolicy) bool {
+	price, speed := false, false
+	if better.Price != nil && worse.Price != nil && *better.Price < *worse.Price {
+		price = 100*(*worse.Price-*better.Price)/math.Max(*worse.Price, 1e-12) >= p.MinPricePercent
+	}
+	if better.Latency != nil && worse.Latency != nil && *better.Latency < *worse.Latency {
+		delta := *worse.Latency - *better.Latency
+		speed = delta >= p.MinLatencyMS && 100*float64(delta)/math.Max(float64(*worse.Latency), 1) >= p.MinLatencyPercent
+	}
+	switch p.Strategy {
+	case PriceFirst:
+		return price
+	case SpeedFirst:
+		return speed
+	default:
+		return p.PriceWeight > 0 && price || p.SpeedWeight > 0 && speed
+	}
 }
 func bounds(nodes []Candidate, price bool) (float64, float64) {
 	lo, hi := math.Inf(1), math.Inf(-1)

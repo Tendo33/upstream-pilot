@@ -1,9 +1,13 @@
 import { AlertCircle, LoaderCircle, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { api, errorMessage, isAuthError, json } from "./api";
 import { AppShell } from "./components/AppShell";
-import { Button, ToastProvider } from "./components/ui";
+import { Button, PageLoader, ToastProvider } from "./components/ui";
+import { RouteBoundary } from "./components/RouteBoundary";
+const OperationsPage = lazy(() => import("./pages/OperationsPage").then(module => ({default: module.OperationsPage})));
+const SuppliersPage = lazy(() => import("./pages/SuppliersPage").then(module => ({default: module.SuppliersPage})));
+const ServiceChecksPage = lazy(() => import("./pages/ServiceChecksPage").then(module => ({default: module.ServiceChecksPage})));
 import { QualityPage } from "./pages/QualityPage";
 import { QualityAlertsPage } from "./pages/QualityAlertsPage";
 import { AccountsPage } from "./pages/AccountsPage";
@@ -101,6 +105,9 @@ function AuthenticatedApp({ user, dark, setDark, onSessionEnded }: { user: User;
       <Routes>
         <Route path="/" element={<QualityPage />} />
         <Route path="/overview" element={<OverviewPage />} />
+        <Route path="/operations" element={<RouteBoundary><Suspense fallback={<PageLoader/>}><OperationsPage/></Suspense></RouteBoundary>}/>
+        <Route path="/suppliers" element={<RouteBoundary><Suspense fallback={<PageLoader/>}><SuppliersPage/></Suspense></RouteBoundary>}/>
+        <Route path="/service-checks" element={<RouteBoundary><Suspense fallback={<PageLoader/>}><ServiceChecksPage /></Suspense></RouteBoundary>} />
         <Route path="/quality-alerts" element={<QualityAlertsPage />} />
         <Route path="/sites" element={<SitesPage />} />
         <Route path="/accounts" element={<AccountsPage />} />

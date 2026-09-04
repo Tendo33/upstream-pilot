@@ -34,7 +34,7 @@ func seedEnginePool(t *testing.T, a *App, w AccountWork, priority int) (string, 
 		args []any
 	}{
 		{`INSERT INTO upstream_groups(id,site_id,remote_id,name) VALUES($1,$2,1,'engine-pool')`, []any{g, w.SiteID}},
-		{`INSERT INTO upstream_accounts(id,site_id,remote_id,name,platform,account_type,remote_status,schedulable,priority,probe_model) VALUES($1,$2,8,'backup','openai','apikey','active',true,$3,'test-model')`, []any{other, w.SiteID, priority}},
+		{`INSERT INTO upstream_accounts(id,site_id,remote_id,name,platform,account_type,remote_status,schedulable,priority,probe_model,source_mapping_fingerprint) VALUES($1,$2,8,'backup','openai','apikey','active',true,$3,'test-model',$4)`, []any{other, w.SiteID, priority, qualityTestMappingFingerprint()}},
 		{`INSERT INTO account_group_memberships(account_id,group_id,site_id) VALUES($1,$3,$4),($2,$3,$4)`, []any{w.ID, other, g, w.SiteID}},
 	} {
 		if _, err := a.db.Exec(ctx, q.sql, q.args...); err != nil {
@@ -42,6 +42,8 @@ func seedEnginePool(t *testing.T, a *App, w AccountWork, priority int) (string, 
 		}
 	}
 	engineRegressionSQL(t, a, `UPDATE upstream_accounts SET native_constraints=(SELECT native_constraints FROM upstream_accounts WHERE id=$2),native_checked_at=now() WHERE id=$1`, other, w.ID)
+	seedSupplierIdentity(t, a, w.ID)
+	seedSupplierIdentity(t, a, other)
 	return g, other
 }
 func TestEngineSlowWindowAndPinnedBackupOrdering(t *testing.T) {
@@ -300,7 +302,7 @@ func TestEngineTrafficRunsWhenProbeDisabled(t *testing.T) {
 	if _, err := a.db.Exec(ctx, `UPDATE upstream_accounts SET health_enabled=false,rate_sync_enabled=false WHERE id=$1`, w.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.db.Exec(ctx, `UPDATE sites SET next_inventory_at=now()+interval '1 hour',next_reconcile_at=now()+interval '1 hour' WHERE id=$1`, w.SiteID); err != nil {
+	if _, err := a.db.Exec(ctx, `UPDATE sites SET next_usage_at=now()+interval '1 hour',next_inventory_at=now()+interval '1 hour',next_reconcile_at=now()+interval '1 hour' WHERE id=$1`, w.SiteID); err != nil {
 		t.Fatal(err)
 	}
 	scheduler := a.NewScheduler()
@@ -308,7 +310,7 @@ func TestEngineTrafficRunsWhenProbeDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Kind != "traffic" {
+	if task.Kind != "traffic-site" {
 		t.Fatalf("not independently scheduled: %+v", task)
 	}
 	scheduler.execute(ctx, task)

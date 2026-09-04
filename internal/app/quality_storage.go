@@ -38,7 +38,7 @@ func (a *App) readQualityState(ctx context.Context, w AccountWork) (quality.Stat
 	var risks []byte
 	var pending *int
 	var generation int64
-	err := a.db.QueryRow(ctx, `SELECT baseline_priority,last_applied_priority,pending_priority,desired_priority,tier,recovery_streak,last_sample_at,last_changed_at,status,reason,conflict,owned_pause,risks,evaluated_at,plan_error,plan_strategy,source_generation FROM quality_states WHERE account_id=$1`, w.ID).Scan(&s.Baseline, &s.LastApplied, &pending, &s.Desired, &s.Tier, &s.RecoveryStreak, &s.LastSampleAt, &s.LastChangedAt, &s.Status, &s.Reason, &s.Conflict, &s.OwnedPause, &risks, &s.EvaluatedAt, &s.PlanError, &s.PlanStrategy, &generation)
+	err := a.db.QueryRow(ctx, `SELECT baseline_priority,last_applied_priority,pending_priority,desired_priority,tier,recovery_streak,last_sample_at,last_changed_at,status,reason,conflict,owned_pause,risks,evaluated_at,plan_error,plan_strategy,source_generation,last_control_applied_at FROM quality_states WHERE account_id=$1`, w.ID).Scan(&s.Baseline, &s.LastApplied, &pending, &s.Desired, &s.Tier, &s.RecoveryStreak, &s.LastSampleAt, &s.LastChangedAt, &s.Status, &s.Reason, &s.Conflict, &s.OwnedPause, &risks, &s.EvaluatedAt, &s.PlanError, &s.PlanStrategy, &generation, &s.LastControlAppliedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return quality.State{Baseline: w.Priority, Desired: w.Priority, Status: "unknown", Reason: "等待评估"}, nil, nil
 	}

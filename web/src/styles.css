@@ -1175,3 +1175,10 @@ code, pre, .mono { font-family: var(--font-mono); }
 .quality-checkbox-line { display:flex; align-items:center; gap:8px; font-size:14px; }
 .quality-notification .quality-incident-time { color:var(--muted); }
 @media (max-width:600px) { .quality-note,.quality-traffic { font-size:14px; } }
+
+.service-profile-row { padding:24px 0; border-bottom:1px solid var(--border); }
+.service-profile-row h2 { font-size:18px; margin:0; }
+.service-profile-facts { display:flex; flex-wrap:wrap; gap:12px 24px; font-size:14px; font-variant-numeric:tabular-nums; }
+
+.service-profile-row h2 { overflow-wrap:anywhere; }
+.service-profile-row .quality-section-heading > div { min-width:0; }

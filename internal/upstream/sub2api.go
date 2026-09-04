@@ -370,6 +370,12 @@ func (c *Sub2Client) ListGroups(ctx context.Context) ([]Sub2Group, error) {
 }
 
 func (c *Sub2Client) ListAccounts(ctx context.Context) ([]Sub2Account, error) {
+	return c.listAccounts(ctx, true)
+}
+func (c *Sub2Client) ListAccountRuntime(ctx context.Context) ([]Sub2Account, error) {
+	return c.listAccounts(ctx, false)
+}
+func (c *Sub2Client) listAccounts(ctx context.Context, hydrate bool) ([]Sub2Account, error) {
 	const pageSize = 200
 	all := make([]Sub2Account, 0, pageSize)
 	seen := make(map[int64]struct{})
@@ -397,19 +403,31 @@ func (c *Sub2Client) ListAccounts(ctx context.Context) ([]Sub2Account, error) {
 		}
 		all = append(all, items...)
 		if total == listTotalDirect {
-			return c.fillMissingAccountSourceURLs(ctx, all), nil
+			if hydrate {
+				return c.fillMissingAccountSourceURLs(ctx, all), nil
+			}
+			return all, nil
 		}
 		if total >= 0 && len(all) >= total {
-			return c.fillMissingAccountSourceURLs(ctx, all), nil
+			if hydrate {
+				return c.fillMissingAccountSourceURLs(ctx, all), nil
+			}
+			return all, nil
 		}
 		if len(items) == 0 {
 			if total > len(all) {
 				return nil, fmt.Errorf("Sub2API account pagination stalled after %d of %d accounts", len(all), total)
 			}
-			return c.fillMissingAccountSourceURLs(ctx, all), nil
+			if hydrate {
+				return c.fillMissingAccountSourceURLs(ctx, all), nil
+			}
+			return all, nil
 		}
 		if total == listTotalUnknown && len(items) < pageSize {
-			return c.fillMissingAccountSourceURLs(ctx, all), nil
+			if hydrate {
+				return c.fillMissingAccountSourceURLs(ctx, all), nil
+			}
+			return all, nil
 		}
 	}
 	return nil, errors.New("Sub2API account pagination exceeded 10000 pages")

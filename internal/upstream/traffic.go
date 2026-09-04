@@ -14,6 +14,8 @@ import (
 )
 
 type TrafficSummary struct {
+	TTFTAvailable       bool           `json:"ttft_available"`
+	CompletionAvailable bool           `json:"completion_available"`
 	FailureCategories   map[string]int `json:"failure_categories"`
 	ExcludedErrors      int            `json:"excluded_errors"`
 	FirstContentAt      *time.Time     `json:"first_content_at"`
@@ -30,91 +32,147 @@ type TrafficSummary struct {
 	WindowEnd           time.Time      `json:"window_end"`
 }
 
-// RecentTraffic reads bounded samples from the admin request log, not the
-// public group endpoint. Missing TTFT fields remain unknown rather than zero.
+type TrafficRecord struct {
+	AccountID      int64     `json:"account_id"`
+	GroupID        *int64    `json:"group_id"`
+	RequestID      string    `json:"request_id"`
+	ErrorID        *int64    `json:"error_id"`
+	Model          string    `json:"model"`
+	Kind           string    `json:"kind"`
+	StatusCode     int       `json:"status_code"`
+	Phase          string    `json:"phase"`
+	Reason         string    `json:"error_type"`
+	Code           string    `json:"code"`
+	CreatedAt      time.Time `json:"created_at"`
+	FirstContent   *int      `json:"time_to_first_token_ms"`
+	Stream         *bool     `json:"stream"`
+	StreamComplete *bool     `json:"stream_complete"`
+	FinalOutcome   string    `json:"final_outcome"`
+	IsFinal        *bool     `json:"is_final"`
+}
+type TrafficBatch struct {
+	Status      string          `json:"status"`
+	Message     string          `json:"message"`
+	Truncated   bool            `json:"truncated"`
+	WindowStart time.Time       `json:"window_start"`
+	WindowEnd   time.Time       `json:"window_end"`
+	Records     []TrafficRecord `json:"-"`
+}
+
+func (c *Sub2Client) RecentSiteTraffic(ctx context.Context) (TrafficBatch, error) {
+	return c.fetchTraffic(ctx, url.Values{})
+}
 func (c *Sub2Client) RecentTraffic(ctx context.Context, id int64, model string) (TrafficSummary, error) {
+	batch, err := c.fetchTraffic(ctx, url.Values{"account_id": {strconv.FormatInt(id, 10)}, "model": {model}})
+	return SummarizeTraffic(batch, id, model), err
+}
+func (c *Sub2Client) fetchTraffic(ctx context.Context, query url.Values) (TrafficBatch, error) {
 	now := time.Now().UTC()
-	s := TrafficSummary{FailureCategories: map[string]int{}, Status: "unknown", Model: model, WindowStart: now.Add(-15 * time.Minute), WindowEnd: now}
-	query := url.Values{"account_id": {strconv.FormatInt(id, 10)}, "model": {model}, "start_time": {s.WindowStart.Format(time.RFC3339)}, "end_time": {now.Format(time.RFC3339)}, "kind": {"all"}, "page_size": {"100"}, "page": {"1"}, "sort": {"created_at_desc"}}
-	times := []int{}
+	b := TrafficBatch{Status: "unknown", WindowStart: now.Add(-15 * time.Minute), WindowEnd: now}
+	query.Set("start_time", b.WindowStart.Format(time.RFC3339))
+	query.Set("end_time", now.Format(time.RFC3339))
+	query.Set("kind", "all")
+	query.Set("page_size", "100")
+	query.Set("sort", "created_at_desc")
+	seen := map[string]bool{}
 	for page := 1; page <= 3; page++ {
 		query.Set("page", strconv.Itoa(page))
 		raw, err := c.request(ctx, http.MethodGet, "/ops/requests?"+query.Encode(), nil, "application/json")
 		if err != nil {
 			var he *HTTPError
 			if errors.As(err, &he) && (he.Status == 404 || he.Status == 405) {
-				s.Status = "unsupported"
-				s.Message = "站点未提供真实请求接口"
-				return s, nil
+				b.Status = "unsupported"
+				b.Message = "站点未提供真实请求接口"
+				return b, nil
 			}
-			s.Status = "error"
-			s.Message = "真实请求采集失败"
-			return s, err
+			b.Status = "error"
+			b.Message = "真实请求采集失败"
+			return b, err
 		}
 		payload, err := unwrapJSON(raw)
 		if err != nil {
-			return s, err
+			return b, err
 		}
 		var result struct {
-			Items []struct {
-				AccountID      int64     `json:"account_id"`
-				Model          string    `json:"model"`
-				Kind           string    `json:"kind"`
-				StatusCode     int       `json:"status_code"`
-				Phase          string    `json:"phase"`
-				Reason         string    `json:"error_type"`
-				Code           string    `json:"code"`
-				CreatedAt      time.Time `json:"created_at"`
-				FirstContent   *int      `json:"time_to_first_token_ms"`
-				StreamComplete *bool     `json:"stream_complete"`
-			} `json:"items"`
-			Total int `json:"total"`
+			Items []TrafficRecord `json:"items"`
+			Total int             `json:"total"`
 		}
 		if err = json.Unmarshal(payload, &result); err != nil {
-			return s, err
+			return b, err
 		}
 		if result.Items == nil {
-			s.Status = "unsupported"
-			s.Message = "真实请求接口未返回可识别的记录"
-			return s, nil
+			b.Status = "unsupported"
+			b.Message = "真实请求接口未返回可识别的记录"
+			return b, nil
 		}
-		for _, item := range result.Items {
-			if item.AccountID != id || (model != "" && item.Model != model) || item.CreatedAt.Before(s.WindowStart) || item.CreatedAt.After(now) {
+		for _, r := range result.Items {
+			if len(r.Model) > 256 || len(r.RequestID) > 256 || r.CreatedAt.Before(b.WindowStart) || r.CreatedAt.After(now) {
 				continue
 			}
-			if item.Kind != "success" && item.Kind != "error" {
-				continue
-			}
-			// Invalid client input is not evidence that an upstream is broken.
-			if item.Kind == "error" {
-				category, supplier := classifyTrafficFailure(item.StatusCode, item.Phase, item.Reason+" "+item.Code)
-				if !supplier {
-					s.ExcludedErrors++
+			if r.RequestID != "" {
+				key := r.RequestID + "/" + r.Kind + "/" + strconv.FormatInt(r.AccountID, 10) + "/" + r.CreatedAt.Format(time.RFC3339Nano)
+				if r.ErrorID != nil {
+					key += "/" + strconv.FormatInt(*r.ErrorID, 10)
+				}
+				if seen[key] {
 					continue
 				}
-				s.FailureCategories[category]++
+				seen[key] = true
 			}
-			if s.LatestAt == nil || item.CreatedAt.After(*s.LatestAt) {
-				v := item.CreatedAt
-				s.LatestAt = &v
-			}
-			s.Total++
-			if item.Kind == "error" || (item.StreamComplete != nil && !*item.StreamComplete) {
-				s.Failed++
-			}
-			if item.Kind == "success" && item.FirstContent != nil && *item.FirstContent >= 0 {
-				times = append(times, *item.FirstContent)
-				if s.FirstContentAt == nil || item.CreatedAt.After(*s.FirstContentAt) {
-					at := item.CreatedAt
-					s.FirstContentAt = &at
-				}
-			}
+			b.Records = append(b.Records, r)
 		}
 		if len(result.Items) < 100 || page*100 >= result.Total {
 			break
 		}
 		if page == 3 {
-			s.Truncated = true
+			b.Truncated = true
+		}
+	}
+	b.Status = "ok"
+	return b, nil
+}
+func SummarizeTraffic(batch TrafficBatch, id int64, model string) TrafficSummary {
+	s := TrafficSummary{FailureCategories: map[string]int{}, Status: batch.Status, Message: batch.Message, Model: model, WindowStart: batch.WindowStart, WindowEnd: batch.WindowEnd, Truncated: batch.Truncated}
+	if batch.Status != "ok" {
+		return s
+	}
+	times := []int{}
+	for _, item := range batch.Records {
+		if item.AccountID != id || (model != "" && item.Model != model) || item.CreatedAt.Before(s.WindowStart) || item.CreatedAt.After(s.WindowEnd) {
+			continue
+		}
+		if item.Kind != "success" && item.Kind != "error" {
+			continue
+		}
+		// Invalid client input is not evidence that an upstream is broken.
+		if item.Kind == "error" {
+			category, supplier := classifyTrafficFailure(item.StatusCode, item.Phase, item.Reason+" "+item.Code)
+			if !supplier {
+				s.ExcludedErrors++
+				continue
+			}
+			s.FailureCategories[category]++
+		}
+		if item.FirstContent != nil && *item.FirstContent >= 0 {
+			s.TTFTAvailable = true
+		}
+		if item.StreamComplete != nil {
+			s.CompletionAvailable = true
+		}
+		if s.LatestAt == nil || item.CreatedAt.After(*s.LatestAt) {
+			v := item.CreatedAt
+			s.LatestAt = &v
+		}
+		s.Total++
+		if item.Kind == "error" || (item.StreamComplete != nil && !*item.StreamComplete) {
+			s.Failed++
+		}
+		if item.Kind == "success" && item.FirstContent != nil && *item.FirstContent >= 0 {
+			times = append(times, *item.FirstContent)
+			if s.FirstContentAt == nil || item.CreatedAt.After(*s.FirstContentAt) {
+				at := item.CreatedAt
+				s.FirstContentAt = &at
+			}
 		}
 	}
 	s.FirstContentSamples = len(times)
@@ -127,7 +185,7 @@ func (c *Sub2Client) RecentTraffic(ctx context.Context, id int64, model string) 
 	if s.Total == 0 {
 		s.Message = "该时间窗口没有可用真实请求样本"
 	}
-	return s, nil
+	return s
 }
 
 // The request phase takes precedence over HTTP status: a customer quota/429 or
