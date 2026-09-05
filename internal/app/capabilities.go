@@ -56,6 +56,18 @@ func (a *App) siteCapabilitiesHandler(w http.ResponseWriter, r *http.Request) er
 		} else if report.Features["traffic_read"].State != "available" {
 			report.Features["traffic_read"] = upstream.Capability{State: traffic.Status, Detail: traffic.Message}
 		}
+		for feed, feature := range map[string]string{"upstream_errors": "supplier_attempts", "request_errors": "request_failures"} {
+			if f, ok := traffic.Feeds[feed]; ok {
+				state := f.Status
+				if state == "ok" {
+					state = "available"
+				}
+				if f.Truncated {
+					state = "partial"
+				}
+				report.Features[feature] = upstream.Capability{State: state, Detail: f.Message}
+			}
+		}
 		if traffic.TTFTAvailable {
 			report.Features["traffic_ttft"] = upstream.Capability{State: "available", Detail: "样本包含 time_to_first_token_ms；未测量样本不参与首字统计"}
 		}

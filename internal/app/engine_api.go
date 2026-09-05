@@ -107,7 +107,7 @@ func (a *App) writeEngineGroups(w http.ResponseWriter, r *http.Request, raw []by
 		remoteGroup                         int64
 		remoteStatus, accountType, platform string
 		sched                               bool
-		sourceGen, opsGen                   int64
+		sourceGen, qualityGen               int64
 		native                              upstream.NativeConstraints
 		nativeAt                            *time.Time
 		qualityStatus                       string
@@ -116,7 +116,7 @@ func (a *App) writeEngineGroups(w http.ResponseWriter, r *http.Request, raw []by
 		planError                           string
 		fresh                               int
 	}
-	rows, err := a.db.Query(r.Context(), `SELECT a.id::text,m.group_id::text,g.remote_id,COALESCE(a.probe_model,''),a.remote_status,a.schedulable,a.source_generation,a.account_type,a.platform,a.native_constraints,a.native_checked_at,COALESCE(q.status,'unknown'),q.last_sample_at,q.evaluated_at,COALESCE(q.conflict,false),COALESCE(q.plan_error,''),COALESCE((p.config->>'fresh_seconds')::int,600),COALESCE(o.source_generation,-1) FROM account_group_memberships m JOIN upstream_accounts a ON a.id=m.account_id JOIN upstream_groups g ON g.id=m.group_id JOIN sites s ON s.id=a.site_id LEFT JOIN quality_states q ON q.account_id=a.id LEFT JOIN quality_policies p ON p.account_id=a.id LEFT JOIN account_operations o ON o.account_id=a.id WHERE s.owner_id=$1 AND a.deleted_at IS NULL AND g.deleted_at IS NULL`, owner)
+	rows, err := a.db.Query(r.Context(), `SELECT a.id::text,m.group_id::text,g.remote_id,COALESCE(a.probe_model,''),a.remote_status,a.schedulable,a.source_generation,a.account_type,a.platform,a.native_constraints,a.native_checked_at,COALESCE(q.status,'unknown'),q.last_sample_at,q.evaluated_at,COALESCE(q.conflict,false),COALESCE(q.plan_error,''),COALESCE((p.config->>'fresh_seconds')::int,600),COALESCE(q.source_generation,-1) FROM account_group_memberships m JOIN upstream_accounts a ON a.id=m.account_id JOIN upstream_groups g ON g.id=m.group_id JOIN sites s ON s.id=a.site_id LEFT JOIN quality_states q ON q.account_id=a.id LEFT JOIN quality_policies p ON p.account_id=a.id WHERE s.owner_id=$1 AND s.enabled AND a.deleted_at IS NULL AND g.deleted_at IS NULL`, owner)
 	if err != nil {
 		return err
 	}
@@ -124,7 +124,7 @@ func (a *App) writeEngineGroups(w http.ResponseWriter, r *http.Request, raw []by
 	for rows.Next() {
 		var f fact
 		var native []byte
-		if err = rows.Scan(&f.id, &f.group, &f.remoteGroup, &f.model, &f.remoteStatus, &f.sched, &f.sourceGen, &f.accountType, &f.platform, &native, &f.nativeAt, &f.qualityStatus, &f.lastSample, &f.evaluated, &f.conflict, &f.planError, &f.fresh, &f.opsGen); err != nil {
+		if err = rows.Scan(&f.id, &f.group, &f.remoteGroup, &f.model, &f.remoteStatus, &f.sched, &f.sourceGen, &f.accountType, &f.platform, &native, &f.nativeAt, &f.qualityStatus, &f.lastSample, &f.evaluated, &f.conflict, &f.planError, &f.fresh, &f.qualityGen); err != nil {
 			rows.Close()
 			return err
 		}
@@ -185,15 +185,15 @@ func (a *App) writeEngineGroups(w http.ResponseWriter, r *http.Request, raw []by
 			if f.group != id || f.model != model {
 				continue
 			}
-			if f.qualityStatus == "degraded" {
+			if f.qualityStatus == "degraded" && f.qualityGen == f.sourceGen {
 				degraded++
 			}
 			if f.evaluated != nil && (evaluated == nil || f.evaluated.Before(*evaluated)) {
 				v := *f.evaluated
 				evaluated = &v
 			}
-			native := upstream.Sub2Account{Native: f.native, Platform: f.platform, Type: f.accountType, Status: f.remoteStatus, Schedulable: f.sched}.NativeEligibility(model, []int64{f.remoteGroup}, now)
-			eligible := f.qualityStatus == "healthy" && f.lastSample != nil && now.Sub(*f.lastSample) <= time.Duration(f.fresh)*time.Second && !f.conflict && f.planError == "" && native.State == "eligible" && f.opsGen == f.sourceGen
+			native := assessWorkNative(AccountWork{NativeConstraints: f.native, NativeCheckedAt: f.nativeAt, Account: Account{Platform: f.platform, AccountType: f.accountType, RemoteStatus: f.remoteStatus, Schedulable: f.sched, ProbeModel: &model}}, []int64{f.remoteGroup}, now)
+			eligible := f.qualityStatus == "healthy" && freshGroupEvidence(f.lastSample, f.evaluated, f.fresh, now) && !f.conflict && f.planError == "" && native.State == "eligible" && f.qualityGen == f.sourceGen
 			if eligible {
 				healthy++
 				s := suppliers[f.id]
@@ -226,4 +226,13 @@ func (a *App) writeEngineGroups(w http.ResponseWriter, r *http.Request, raw []by
 	}
 	writeData(w, 200, groups)
 	return nil
+}
+
+func freshGroupEvidence(sample, evaluated *time.Time, seconds int, now time.Time) bool {
+	for _, at := range []*time.Time{sample, evaluated} {
+		if at == nil || at.After(now.Add(time.Second)) || now.Sub(*at) > time.Duration(seconds)*time.Second {
+			return false
+		}
+	}
+	return true
 }

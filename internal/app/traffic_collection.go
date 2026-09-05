@@ -43,10 +43,6 @@ func (a *App) collectSiteTrafficLocked(ctx context.Context, id, owner string) er
 	requestCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	batch, sampleErr := client.RecentSiteTraffic(requestCtx)
-	if sampleErr != nil {
-		batch.Status = "error"
-		batch.Message = "站点真实请求采集失败"
-	}
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -111,7 +107,7 @@ func (a *App) collectSiteTrafficLocked(ctx context.Context, id, owner string) er
 			return err
 		}
 	}
-	meta, _ := json.Marshal(map[string]any{"status": batch.Status, "message": batch.Message, "truncated": batch.Truncated, "uncorrelated": uncorrelated, "checked_at": time.Now().UTC(), "sample_rows": len(batch.Records)})
+	meta, _ := json.Marshal(map[string]any{"status": batch.Status, "message": batch.Message, "truncated": batch.Truncated, "uncorrelated": uncorrelated, "checked_at": time.Now().UTC(), "sample_rows": len(batch.Records), "feeds": batch.Feeds})
 	if _, err = tx.Exec(ctx, `UPDATE sites SET traffic_collection=$2,next_traffic_sample_at=now()+interval '60 seconds',traffic_sample_lease_until=NULL WHERE id=$1`, id, meta); err != nil {
 		return err
 	}

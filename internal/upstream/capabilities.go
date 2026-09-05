@@ -8,9 +8,10 @@ type Capability struct {
 }
 
 type Capabilities struct {
-	Version   string                `json:"version"`
-	CheckedAt time.Time             `json:"checked_at"`
-	Features  map[string]Capability `json:"features"`
+	NativeBilling []NativeBillingObservation `json:"native_billing"`
+	Version       string                     `json:"version"`
+	CheckedAt     time.Time                  `json:"checked_at"`
+	Features      map[string]Capability      `json:"features"`
 }
 
 // InventoryCapabilities describes observations, never guessed version ranges.
@@ -19,6 +20,8 @@ func InventoryCapabilities(version string, accounts []Sub2Account) Capabilities 
 	c := Capabilities{Version: version, CheckedAt: time.Now().UTC(), Features: map[string]Capability{
 		"inventory_read":     {"available", "账号与分组列表已成功读取"},
 		"control_write":      {"unknown", "尚未通过实际动作及读回验证写权限"},
+		"supplier_attempts":  {"unknown", "等待上游尝试错误接口采集"},
+		"request_failures":   {"unknown", "等待最终请求错误接口采集"},
 		"traffic_read":       {"unknown", "等待真实请求接口采集"},
 		"traffic_ttft":       {"unknown", "请求总耗时不能代替首字时间"},
 		"traffic_completion": {"unknown", "等待明确的流结束字段"},
@@ -30,6 +33,7 @@ func InventoryCapabilities(version string, accounts []Sub2Account) Capabilities 
 	}
 	constraints, identities := 0, 0
 	for _, a := range accounts {
+		c.NativeBilling = append(c.NativeBilling, a.NativeBilling)
 		if a.Native.Known && a.Native.MappingKnown && a.Native.GroupsKnown {
 			constraints++
 		}

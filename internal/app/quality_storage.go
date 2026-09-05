@@ -112,7 +112,8 @@ func (a *App) qualitySnapshot(ctx context.Context, w AccountWork, p quality.Poli
 		value := at
 		snap.TrafficAt = &value
 		var traffic upstream.TrafficSummary
-		if json.Unmarshal(raw, &traffic) == nil && traffic.Status == "ok" {
+		if json.Unmarshal(raw, &traffic) == nil && (traffic.Status == "ok" || traffic.Status == "partial") {
+			snap.TrafficIncomplete = traffic.Incomplete || traffic.Truncated || traffic.Status == "partial"
 			snap.TrafficAt = traffic.LatestAt
 			snap.TrafficTotal = traffic.Total
 			snap.TrafficFailed = traffic.Failed

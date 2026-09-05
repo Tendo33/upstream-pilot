@@ -479,7 +479,7 @@ func (a *App) preflightEngine(ctx context.Context, works []engineWork) {
 }
 
 func assessWorkNative(w AccountWork, groups []int64, now time.Time) upstream.NativeAssessment {
-	if w.NativeCheckedAt == nil || now.Sub(*w.NativeCheckedAt) > 5*time.Minute {
+	if w.NativeCheckedAt == nil || w.NativeCheckedAt.After(now.Add(time.Second)) || now.Sub(*w.NativeCheckedAt) > 5*time.Minute {
 		return upstream.NativeAssessment{State: "unknown", Reason: "原生资格快照未采集或已过期"}
 	}
 	model := ""

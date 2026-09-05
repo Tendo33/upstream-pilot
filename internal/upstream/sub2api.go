@@ -47,27 +47,28 @@ type Sub2AccountGroup struct {
 }
 
 type Sub2Account struct {
-	Native                                   NativeConstraints  `json:"-"`
-	SourceMappingFingerprint                 string             `json:"-"`
-	SourceMappingKnown                       bool               `json:"-"`
-	LoadFactor                               *int               `json:"load_factor"`
-	Concurrency                              *int               `json:"concurrency"`
-	ID                                       int64              `json:"id"`
-	Name                                     string             `json:"name"`
-	Platform                                 string             `json:"platform"`
-	Type                                     string             `json:"type"`
-	Status                                   any                `json:"status"`
-	Schedulable                              bool               `json:"schedulable"`
-	Priority                                 int                `json:"priority"`
-	RateMultiplier                           *float64           `json:"rate_multiplier"`
-	UpdatedAt                                *time.Time         `json:"updated_at"`
-	AccountGroups                            []Sub2AccountGroup `json:"account_groups"`
-	SourceCredentialsPresent                 bool               `json:"-"`
-	ObservedSourceBaseURLKnown               bool               `json:"-"`
-	ObservedSourceBaseURL                    *string            `json:"-"`
-	ObservedSourceCredentialFingerprintKnown bool               `json:"-"`
-	ObservedSourceCredentialFingerprint      string             `json:"-"`
-	SourceTypeHint                           string             `json:"-"`
+	NativeBilling                            NativeBillingObservation `json:"-"`
+	Native                                   NativeConstraints        `json:"-"`
+	SourceMappingFingerprint                 string                   `json:"-"`
+	SourceMappingKnown                       bool                     `json:"-"`
+	LoadFactor                               *int                     `json:"load_factor"`
+	Concurrency                              *int                     `json:"concurrency"`
+	ID                                       int64                    `json:"id"`
+	Name                                     string                   `json:"name"`
+	Platform                                 string                   `json:"platform"`
+	Type                                     string                   `json:"type"`
+	Status                                   any                      `json:"status"`
+	Schedulable                              bool                     `json:"schedulable"`
+	Priority                                 int                      `json:"priority"`
+	RateMultiplier                           *float64                 `json:"rate_multiplier"`
+	UpdatedAt                                *time.Time               `json:"updated_at"`
+	AccountGroups                            []Sub2AccountGroup       `json:"account_groups"`
+	SourceCredentialsPresent                 bool                     `json:"-"`
+	ObservedSourceBaseURLKnown               bool                     `json:"-"`
+	ObservedSourceBaseURL                    *string                  `json:"-"`
+	ObservedSourceCredentialFingerprintKnown bool                     `json:"-"`
+	ObservedSourceCredentialFingerprint      string                   `json:"-"`
+	SourceTypeHint                           string                   `json:"-"`
 }
 
 func (a *Sub2Account) UnmarshalJSON(data []byte) error {
@@ -89,6 +90,7 @@ func (a *Sub2Account) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	a.Native = parseNativeConstraints(data, *a)
+	a.NativeBilling = parseNativeBilling(payload.Extra, a.ID, a.Name)
 	a.SourceMappingKnown = a.Native.MappingKnown
 	if a.SourceMappingKnown {
 		raw, _ := json.Marshal(struct {

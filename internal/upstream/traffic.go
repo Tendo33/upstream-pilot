@@ -2,10 +2,7 @@ package upstream
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"math"
-	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -14,25 +11,31 @@ import (
 )
 
 type TrafficSummary struct {
-	TTFTAvailable       bool           `json:"ttft_available"`
-	CompletionAvailable bool           `json:"completion_available"`
-	FailureCategories   map[string]int `json:"failure_categories"`
-	ExcludedErrors      int            `json:"excluded_errors"`
-	FirstContentAt      *time.Time     `json:"first_content_at"`
-	FirstContentSamples int            `json:"first_content_samples"`
-	LatestAt            *time.Time     `json:"latest_at"`
-	Status              string         `json:"status"`
-	Message             string         `json:"message"`
-	Model               string         `json:"model"`
-	Total               int            `json:"total"`
-	Failed              int            `json:"failed"`
-	FirstContentP95     *int           `json:"first_content_p95_ms"`
-	Truncated           bool           `json:"truncated"`
-	WindowStart         time.Time      `json:"window_start"`
-	WindowEnd           time.Time      `json:"window_end"`
+	Feeds               map[string]TrafficFeed `json:"feeds,omitempty"`
+	Incomplete          bool                   `json:"incomplete"`
+	TTFTAvailable       bool                   `json:"ttft_available"`
+	CompletionAvailable bool                   `json:"completion_available"`
+	FailureCategories   map[string]int         `json:"failure_categories"`
+	ExcludedErrors      int                    `json:"excluded_errors"`
+	FirstContentAt      *time.Time             `json:"first_content_at"`
+	FirstContentSamples int                    `json:"first_content_samples"`
+	LatestAt            *time.Time             `json:"latest_at"`
+	Status              string                 `json:"status"`
+	Message             string                 `json:"message"`
+	Model               string                 `json:"model"`
+	Total               int                    `json:"total"`
+	Failed              int                    `json:"failed"`
+	FirstContentP95     *int                   `json:"first_content_p95_ms"`
+	Truncated           bool                   `json:"truncated"`
+	WindowStart         time.Time              `json:"window_start"`
+	WindowEnd           time.Time              `json:"window_end"`
 }
 
 type TrafficRecord struct {
+	Source         string    `json:"-"`
+	ErrorOwner     string    `json:"error_owner"`
+	ErrorSource    string    `json:"error_source"`
+	NativeType     string    `json:"type"`
 	AccountID      int64     `json:"account_id"`
 	GroupID        *int64    `json:"group_id"`
 	RequestID      string    `json:"request_id"`
@@ -51,12 +54,13 @@ type TrafficRecord struct {
 	IsFinal        *bool     `json:"is_final"`
 }
 type TrafficBatch struct {
-	Status      string          `json:"status"`
-	Message     string          `json:"message"`
-	Truncated   bool            `json:"truncated"`
-	WindowStart time.Time       `json:"window_start"`
-	WindowEnd   time.Time       `json:"window_end"`
-	Records     []TrafficRecord `json:"-"`
+	Feeds       map[string]TrafficFeed `json:"feeds"`
+	Status      string                 `json:"status"`
+	Message     string                 `json:"message"`
+	Truncated   bool                   `json:"truncated"`
+	WindowStart time.Time              `json:"window_start"`
+	WindowEnd   time.Time              `json:"window_end"`
+	Records     []TrafficRecord        `json:"-"`
 }
 
 func (c *Sub2Client) RecentSiteTraffic(ctx context.Context) (TrafficBatch, error) {
@@ -66,77 +70,18 @@ func (c *Sub2Client) RecentTraffic(ctx context.Context, id int64, model string) 
 	batch, err := c.fetchTraffic(ctx, url.Values{"account_id": {strconv.FormatInt(id, 10)}, "model": {model}})
 	return SummarizeTraffic(batch, id, model), err
 }
-func (c *Sub2Client) fetchTraffic(ctx context.Context, query url.Values) (TrafficBatch, error) {
-	now := time.Now().UTC()
-	b := TrafficBatch{Status: "unknown", WindowStart: now.Add(-15 * time.Minute), WindowEnd: now}
-	query.Set("start_time", b.WindowStart.Format(time.RFC3339))
-	query.Set("end_time", now.Format(time.RFC3339))
-	query.Set("kind", "all")
-	query.Set("page_size", "100")
-	query.Set("sort", "created_at_desc")
-	seen := map[string]bool{}
-	for page := 1; page <= 3; page++ {
-		query.Set("page", strconv.Itoa(page))
-		raw, err := c.request(ctx, http.MethodGet, "/ops/requests?"+query.Encode(), nil, "application/json")
-		if err != nil {
-			var he *HTTPError
-			if errors.As(err, &he) && (he.Status == 404 || he.Status == 405) {
-				b.Status = "unsupported"
-				b.Message = "站点未提供真实请求接口"
-				return b, nil
-			}
-			b.Status = "error"
-			b.Message = "真实请求采集失败"
-			return b, err
-		}
-		payload, err := unwrapJSON(raw)
-		if err != nil {
-			return b, err
-		}
-		var result struct {
-			Items []TrafficRecord `json:"items"`
-			Total int             `json:"total"`
-		}
-		if err = json.Unmarshal(payload, &result); err != nil {
-			return b, err
-		}
-		if result.Items == nil {
-			b.Status = "unsupported"
-			b.Message = "真实请求接口未返回可识别的记录"
-			return b, nil
-		}
-		for _, r := range result.Items {
-			if len(r.Model) > 256 || len(r.RequestID) > 256 || r.CreatedAt.Before(b.WindowStart) || r.CreatedAt.After(now) {
-				continue
-			}
-			if r.RequestID != "" {
-				key := r.RequestID + "/" + r.Kind + "/" + strconv.FormatInt(r.AccountID, 10) + "/" + r.CreatedAt.Format(time.RFC3339Nano)
-				if r.ErrorID != nil {
-					key += "/" + strconv.FormatInt(*r.ErrorID, 10)
-				}
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-			}
-			b.Records = append(b.Records, r)
-		}
-		if len(result.Items) < 100 || page*100 >= result.Total {
-			break
-		}
-		if page == 3 {
-			b.Truncated = true
-		}
-	}
-	b.Status = "ok"
-	return b, nil
-}
 func SummarizeTraffic(batch TrafficBatch, id int64, model string) TrafficSummary {
-	s := TrafficSummary{FailureCategories: map[string]int{}, Status: batch.Status, Message: batch.Message, Model: model, WindowStart: batch.WindowStart, WindowEnd: batch.WindowEnd, Truncated: batch.Truncated}
-	if batch.Status != "ok" {
+	s := TrafficSummary{Feeds: batch.Feeds, Incomplete: batch.Status != "ok" || batch.Truncated, FailureCategories: map[string]int{}, Status: batch.Status, Message: batch.Message, Model: model, WindowStart: batch.WindowStart, WindowEnd: batch.WindowEnd, Truncated: batch.Truncated}
+	if batch.Status != "ok" && batch.Status != "partial" {
 		return s
 	}
 	times := []int{}
+	errorSource := ""
+	if f := batch.Feeds[trafficUpstreamErrors]; f.Status == "ok" || f.Rows > 0 {
+		errorSource = trafficUpstreamErrors
+	} else if f := batch.Feeds[trafficRequestErrors]; f.Status == "ok" || f.Rows > 0 {
+		errorSource = trafficRequestErrors
+	}
 	for _, item := range batch.Records {
 		if item.AccountID != id || (model != "" && item.Model != model) || item.CreatedAt.Before(s.WindowStart) || item.CreatedAt.After(s.WindowEnd) {
 			continue
@@ -144,9 +89,14 @@ func SummarizeTraffic(batch TrafficBatch, id int64, model string) TrafficSummary
 		if item.Kind != "success" && item.Kind != "error" {
 			continue
 		}
+		// The upstream feed is authoritative for supplier attempts. Request errors
+		// report the final result and may duplicate the last attempt.
+		if item.Kind == "error" && errorSource != "" && item.Source != errorSource {
+			continue
+		}
 		// Invalid client input is not evidence that an upstream is broken.
 		if item.Kind == "error" {
-			category, supplier := classifyTrafficFailure(item.StatusCode, item.Phase, item.Reason+" "+item.Code)
+			category, supplier := classifyRecordFailure(item)
 			if !supplier {
 				s.ExcludedErrors++
 				continue
@@ -176,7 +126,6 @@ func SummarizeTraffic(batch TrafficBatch, id int64, model string) TrafficSummary
 		}
 	}
 	s.FirstContentSamples = len(times)
-	s.Status = "ok"
 	if len(times) > 0 {
 		sort.Ints(times)
 		value := times[int(math.Ceil(float64(len(times))*.95))-1]
@@ -217,4 +166,14 @@ func classifyTrafficFailure(status int, phase, reason string) (string, bool) {
 		return "model_or_request", true
 	}
 	return "upstream_http", true
+}
+
+func classifyRecordFailure(r TrafficRecord) (string, bool) {
+	// Explicit ownership outranks ambiguous 429/5xx status. Unknown owners do
+	// not erase legacy phase-based classification.
+	switch strings.ToLower(r.ErrorOwner) {
+	case "client", "user", "gateway", "platform", "internal":
+		return "non_supplier", false
+	}
+	return classifyTrafficFailure(r.StatusCode, r.Phase, r.Reason+" "+r.NativeType+" "+r.Code)
 }

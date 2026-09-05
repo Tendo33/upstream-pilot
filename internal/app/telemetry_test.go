@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -50,9 +51,10 @@ func TestSiteTrafficBatchesAccountsAndMergesUserResults(t *testing.T) {
 func TestSiteTelemetryLateResponseCannotCrossAddressChange(t *testing.T) {
 	a, w, _, _ := newQualityIntegration(t)
 	started, finish := make(chan struct{}), make(chan struct{})
+	var once sync.Once
 	ctx := context.Background()
 	server := httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, r *http.Request) {
-		close(started)
+		once.Do(func() { close(started) })
 		<-finish
 		_, _ = out.Write([]byte(`{"code":0,"data":{"items":[],"total":0}}`))
 	}))

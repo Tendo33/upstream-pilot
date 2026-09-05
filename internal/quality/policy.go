@@ -70,6 +70,7 @@ type Sample struct {
 	Model          string    `json:"model"`
 }
 type Snapshot struct {
+	TrafficIncomplete     bool
 	TrafficLatencyAt      *time.Time
 	BalanceAt             *time.Time
 	RateAt                *time.Time
@@ -192,7 +193,8 @@ func Evaluate(p Policy, previous State, snapshot Snapshot, now time.Time) Decisi
 		v := times[int(math.Ceil(.95*float64(len(times))))-1]
 		d.P95 = &v
 	}
-	trafficKnown := snapshot.TrafficFresh && snapshot.TrafficTotal >= p.MinimumSamples
+	trafficKnown := snapshot.TrafficFresh && !snapshot.TrafficIncomplete && snapshot.TrafficTotal >= p.MinimumSamples
+	partialFailure := snapshot.TrafficFresh && snapshot.TrafficIncomplete && snapshot.TrafficTotal >= p.MinimumSamples && snapshot.TrafficFailed >= p.FailureThreshold && 100*float64(snapshot.TrafficFailed)/float64(snapshot.TrafficTotal) >= p.ErrorPercent
 	trafficLatencyKnown := trafficKnown && snapshot.TrafficP95 != nil && snapshot.TrafficLatencySamples >= p.MinimumSamples && snapshot.TrafficLatencyAt != nil && !snapshot.TrafficLatencyAt.After(now.Add(time.Second)) && now.Sub(*snapshot.TrafficLatencyAt) <= time.Duration(p.FreshSeconds)*time.Second
 	if trafficLatencyKnown {
 		d.SortingLatency = snapshot.TrafficP95
@@ -205,7 +207,7 @@ func Evaluate(p Policy, previous State, snapshot Snapshot, now time.Time) Decisi
 	}
 	probeKnown := fresh && len(samples) >= p.MinimumSamples
 	failureTrigger := fresh && (consecutive >= p.FailureThreshold || (latest != nil && !latest.Success && probeKnown && 100*float64(failed)/float64(len(samples)) >= p.ErrorPercent))
-	failureTrigger = failureTrigger || (trafficKnown && 100*float64(snapshot.TrafficFailed)/float64(snapshot.TrafficTotal) >= p.ErrorPercent)
+	failureTrigger = failureTrigger || partialFailure || (trafficKnown && 100*float64(snapshot.TrafficFailed)/float64(snapshot.TrafficTotal) >= p.ErrorPercent)
 	slowTrigger := fresh && (slowRun >= p.SlowConsecutive || (latest != nil && latest.FirstContentMS != nil && *latest.FirstContentMS > p.SlowMS && len(times) >= p.MinimumSamples && d.P95 != nil && *d.P95 > p.SlowMS))
 	slowTrigger = slowTrigger || (trafficKnown && snapshot.TrafficP95 != nil && *snapshot.TrafficP95 > p.SlowMS)
 	reference := snapshot.ReferenceRate
@@ -217,9 +219,10 @@ func Evaluate(p Policy, previous State, snapshot Snapshot, now time.Time) Decisi
 	latestOK := fresh && latest.Success
 	slowOK := latestOK && latest.FirstContentMS != nil && *latest.FirstContentMS <= p.SlowMS
 	qualityAt := d.LatestAt
-	if trafficKnown && snapshot.TrafficAt != nil && (qualityAt == nil || snapshot.TrafficAt.After(*qualityAt)) {
+	if (trafficKnown || partialFailure) && snapshot.TrafficAt != nil && (qualityAt == nil || snapshot.TrafficAt.After(*qualityAt)) {
 		qualityAt = snapshot.TrafficAt
 	}
+	d.LatestAt = qualityAt
 	type observation struct {
 		kind                       string
 		trigger, known, good, hard bool
@@ -231,7 +234,7 @@ func Evaluate(p Policy, previous State, snapshot Snapshot, now time.Time) Decisi
 		balanceLevel = 2
 	}
 	obs := []observation{
-		{"failure", failureTrigger, fresh || trafficKnown, latestOK || (trafficKnown && snapshot.TrafficFailed == 0), hardRun >= p.FailureThreshold, 2, p.RecoverySamples, qualityAt},
+		{"failure", failureTrigger, fresh || trafficKnown || partialFailure, latestOK || (trafficKnown && snapshot.TrafficFailed == 0), hardRun >= p.FailureThreshold, 2, p.RecoverySamples, qualityAt},
 		{"slow", slowTrigger, fresh || trafficKnown, slowOK || (trafficKnown && snapshot.TrafficP95 != nil && *snapshot.TrafficP95 <= p.SlowMS), false, 1, p.RecoverySamples, qualityAt},
 		{"balance", balanceTrigger, p.LowBalance == nil || snapshot.BalanceFresh, p.LowBalance == nil || (snapshot.BalanceFresh && snapshot.Balance != nil && *snapshot.Balance > *p.LowBalance), balanceLevel == 2, balanceLevel, 1, snapshot.BalanceAt},
 		{"price", priceTrigger, (p.MaxRate == nil && p.PriceRisePercent == 0) || snapshot.RateFresh, !priceTrigger && ((p.MaxRate == nil && p.PriceRisePercent == 0) || snapshot.RateFresh), false, 1, 1, snapshot.RateAt},
@@ -341,7 +344,7 @@ func Evaluate(p Policy, previous State, snapshot Snapshot, now time.Time) Decisi
 	if s.Status == "unknown" {
 		s.Desired = previous.Desired
 	}
-	if !fresh && !trafficKnown && !priceTrigger && !balanceTrigger {
+	if !fresh && !trafficKnown && !partialFailure && !priceTrigger && !balanceTrigger {
 		s.Status = "unknown"
 		s.Reason = "最新证据已过期，保留现有优先级"
 		s.Desired = previous.Desired

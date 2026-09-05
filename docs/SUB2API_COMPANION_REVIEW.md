@@ -1,4 +1,6 @@
-# 作为 Sub2API 辅助项目的续审与改进路线
+# Sub2API 辅助能力初始审查与改进路线（历史基线）
+
+> 本文保留改进开始前的问题与路线，不代表当前实现状态。当前结果请看 [整仓审查](REVIEW.md) 与 [验收记录](IMPLEMENTATION_LEDGER.md)。A1–C3 的代码已落地，本地验收与生产接管仍分开记录。
 
 审查基线：Upstream Pilot `5165144`，2026-09-04。定位是辅助 Sub2API 维护分组服务质量。以下区分已复现的问题、接口契约差距和待建设能力；不把建议描述为已经实现。
 
@@ -10,7 +12,7 @@
 
 官方调度实现综合多种运行信号并处理会话绑定，优先级只是其中一项。因此参数读回成功还不足以证明真实请求已经转向理想上游。[Sub2API 调度实现](https://github.com/Wei-Shaw/sub2api/blob/main/backend/internal/service/openai_account_scheduler.go)
 
-## 本轮确认的问题
+## 初始审查确认的问题
 
 ### R1 · P1：当前来源与历史证据没有完整隔离
 

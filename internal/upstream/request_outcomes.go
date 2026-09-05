@@ -29,14 +29,22 @@ func FinalRequestOutcomes(records []TrafficRecord) ([]RequestOutcome, int) {
 	byRequest := map[string]RequestOutcome{}
 	uncorrelated := 0
 	for _, r := range records {
+		// A supplier attempt can fail even when a later account completes the request.
+		if r.Source == trafficUpstreamErrors {
+			continue
+		}
 		if r.GroupID == nil || *r.GroupID <= 0 || r.RequestID == "" {
 			uncorrelated++
 			continue
 		}
 		outcome := "unknown"
-		switch r.FinalOutcome {
-		case "success", "failure":
-			outcome = r.FinalOutcome
+		if r.Source == trafficRequestErrors {
+			outcome = "failure"
+		} else {
+			switch r.FinalOutcome {
+			case "success", "failure":
+				outcome = r.FinalOutcome
+			}
 		}
 		if outcome == "unknown" && r.IsFinal != nil && *r.IsFinal {
 			if r.Kind == "error" || r.StatusCode >= 400 || r.StreamComplete != nil && !*r.StreamComplete {

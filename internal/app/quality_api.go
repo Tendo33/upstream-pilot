@@ -393,7 +393,7 @@ func (a *App) sampleQualityTraffic(ctx context.Context, w AccountWork) error {
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	snapshot, sampleErr := client.RecentTraffic(requestCtx, w.RemoteID, model)
-	if sampleErr != nil {
+	if sampleErr != nil && snapshot.Status != "partial" {
 		snapshot.Status = "error"
 		snapshot.Message = "真实请求采集失败；主动探测继续工作"
 	}
