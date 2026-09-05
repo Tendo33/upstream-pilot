@@ -37,7 +37,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 		s.app.runAccountBalanceRefresher(ctx)
 	}()
 	s.wg.Add(1)
-	go func() { defer s.wg.Done(); s.app.runQualityNotifications(ctx) }()
+	go func() { defer s.wg.Done(); s.app.runNotifications(ctx) }()
 	s.cleanup(ctx)
 	ticker := time.NewTicker(time.Second)
 	cleanup := time.NewTicker(24 * time.Hour)

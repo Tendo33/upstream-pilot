@@ -28,12 +28,10 @@ func (a *App) persistRateObservation(ctx context.Context, w AccountWork, value r
 		if err != nil {
 			return err
 		}
-		if previous != nil {
-			_, err = tx.Exec(ctx, `INSERT INTO quality_notifications(id,owner_id,account_id,kind,message) VALUES($1,$2,$3,'price_change',$4)`, uuid.NewString(), w.OwnerID, w.ID, fmt.Sprintf("%s：采购倍率 %.4f → %.4f", w.Name, *previous, value.EffectiveRate))
-			if err != nil {
-				return err
-			}
-		}
+
+	}
+	if err = a.recordPriceNotificationTx(ctx, tx, w, value.EffectiveRate); err != nil {
+		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE upstream_accounts SET observed_cost_rate=$2,source_rate_multiplier=$3,source_rate_endpoint=$4,price_reference_rate=COALESCE(price_reference_rate,$2),price_status='ok',price_source_generation=source_generation,last_rate_attempt_at=now(),last_rate_sync_at=now(),source_credential_state=CASE WHEN $5 THEN 'valid' ELSE source_credential_state END,source_credential_checked_at=CASE WHEN $5 THEN now() ELSE source_credential_checked_at END,next_rate_sync_at=now()+rate_sync_interval_seconds*interval '1 second',last_error=NULL,work_lease_until=NULL,updated_at=now() WHERE id=$1`, w.ID, value.EffectiveRate, value.SourceRate, value.Endpoint, w.SourceType == "newapi")
 	if err != nil {
@@ -102,7 +100,14 @@ func (a *App) persistEngineDecision(ctx context.Context, w AccountWork, p engine
 			return err
 		}
 		if qualityEventKey(p.Old) != qualityEventKey(s) && s.Status != "watching" && !(p.Old.Status == "unknown" && s.Status == "healthy") {
-			_, err = tx.Exec(ctx, `INSERT INTO quality_notifications(id,owner_id,account_id,kind,message) VALUES($1,$2,$3,$4,$5)`, uuid.NewString(), w.OwnerID, w.ID, s.Status, fmt.Sprintf("%s：%s（优先级 %d → %d，%s）", w.Name, s.Reason, before, s.Desired, p.Policy.Mode))
+			action := fmt.Sprintf("建议优先级 %d → %d，尚未写回", before, s.Desired)
+			if p.Policy.Mode == "observe" {
+				action = fmt.Sprintf("仅观察；建议优先级 %d → %d", before, s.Desired)
+			}
+			if applied {
+				action = "已完成控制写回"
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO quality_notifications(id,owner_id,account_id,kind,message) VALUES($1,$2,$3,$4,$5)`, uuid.NewString(), w.OwnerID, w.ID, s.Status, fmt.Sprintf("%s：%s（%s）", w.Name, s.Reason, action))
 			if err != nil {
 				return err
 			}

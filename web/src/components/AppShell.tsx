@@ -33,7 +33,7 @@ const commonLinks = [
   { to: "/sites", label: "站点", icon: Server },
   { to: "/accounts", label: "账号", icon: Database },
   { to: "/groups", label: "分组", icon: Layers3 },
-  { to: "/alerts", label: "预警", icon: BellRing },
+  { to: "/notifications", label: "消息", icon: BellRing },
   { to: "/events", label: "活动日志", icon: Activity },
 ];
 

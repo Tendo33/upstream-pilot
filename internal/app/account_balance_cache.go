@@ -126,7 +126,7 @@ func (a *App) refreshDueAccountBalanceSnapshots(ctx context.Context) error {
 	for refreshErr := range errorsFound {
 		joined = errors.Join(joined, refreshErr)
 	}
-	if alertErr := a.sendDueBalanceAlerts(ctx, time.Now().UTC()); alertErr != nil {
+	if alertErr := a.evaluateBalanceNotifications(ctx, time.Now().UTC()); alertErr != nil {
 		joined = errors.Join(joined, alertErr)
 	}
 	return joined

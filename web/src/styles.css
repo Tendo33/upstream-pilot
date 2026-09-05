@@ -1182,3 +1182,32 @@ code, pre, .mono { font-family: var(--font-mono); }
 
 .service-profile-row h2 { overflow-wrap:anywhere; }
 .service-profile-row .quality-section-heading > div { min-width:0; }
+
+/* Message center: one configuration surface, independent per-channel receipts. */
+.message-section { padding-block: 24px; border-top: 1px solid var(--border); }
+.message-section > h2, .message-section > .quality-section-heading { margin-bottom: 16px; }
+.message-channel, .message-delivery { display:flex; align-items:center; justify-content:space-between; gap:16px; padding-block:16px; border-bottom:1px solid var(--border); }
+.message-channel > div:first-child, .message-delivery > div { min-width:0; }
+.message-channel p, .message-event p { overflow-wrap:anywhere; }
+.message-channel .quality-actions { flex-shrink:0; }
+.message-event { padding-block:20px; border-bottom:1px solid var(--border); }
+.message-event-heading { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.message-event-heading time { font-size:12px; color:var(--muted); }
+.message-body { white-space:pre-wrap; margin-block:12px; }
+.message-center summary { cursor:pointer; font-weight:600; padding-block:8px; }
+.message-deliveries { padding-top:8px; }
+.message-delivery span { display:block; font-size:13px; margin-top:6px; }
+.message-subscriptions { display:flex; flex-wrap:wrap; gap:12px 24px; border:0; padding:16px 0; margin:0; }
+.message-subscriptions legend { font-weight:600; margin-bottom:8px; }
+.message-subscriptions label { display:flex; align-items:center; gap:6px; }
+.message-filter { display:flex; align-items:center; gap:8px; }
+.message-filter select { max-width:180px; }
+.message-center .quality-editor > .field { margin-block:16px; }
+@media (max-width:640px) {
+ .message-channel, .message-delivery { align-items:flex-start; flex-direction:column; }
+ .message-channel .quality-actions { flex-wrap:wrap; }
+ .message-filter { font-size:13px; }
+ .message-section { padding-block:20px; }
+}
+
+.message-delivery:last-child, .message-event:last-child { border-bottom:0; }

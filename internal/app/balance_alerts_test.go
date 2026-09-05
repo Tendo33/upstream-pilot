@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestNormalizeWeComWebhookURL(t *testing.T) {
@@ -68,43 +67,6 @@ func TestSendWeComWebhookRejectsAPIError(t *testing.T) {
 	err := sendWeComWebhook(context.Background(), server.Client(), server.URL, "test")
 	if err == nil || !strings.Contains(err.Error(), "93000") {
 		t.Fatalf("sendWeComWebhook() error = %v", err)
-	}
-}
-
-func TestBuildWeComBalanceAlertMessage(t *testing.T) {
-	message := buildWeComBalanceAlertMessage(10, []lowBalanceAccount{
-		{SiteName: "主站", AccountName: "账号 *A*", Remaining: 1.25, Unit: "USD"},
-	}, time.Date(2026, 7, 28, 1, 2, 3, 0, time.UTC), "https://pilot.example")
-
-	for _, expected := range []string{
-		"## Upstream Pilot 余额预警",
-		"预警阈值：<font color=\"warning\">10</font>",
-		"主站 / 账号 \\*A\\*",
-		"1.25 USD",
-		"[打开账号页面](https://pilot.example/accounts)",
-	} {
-		if !strings.Contains(message, expected) {
-			t.Errorf("message missing %q:\n%s", expected, message)
-		}
-	}
-	if len(message) > maxWeComMarkdownBytes {
-		t.Fatalf("message length = %d", len(message))
-	}
-}
-
-func TestBuildWeComBalanceAlertMessageStaysWithinLimit(t *testing.T) {
-	accounts := make([]lowBalanceAccount, 100)
-	for index := range accounts {
-		accounts[index] = lowBalanceAccount{
-			SiteName: strings.Repeat("站", 100), AccountName: strings.Repeat("号", 100), Remaining: float64(index) / 100, Unit: "USD",
-		}
-	}
-	message := buildWeComBalanceAlertMessage(100, accounts, time.Now().UTC(), "https://"+strings.Repeat("x", 1000)+".example")
-	if len(message) > maxWeComMarkdownBytes {
-		t.Fatalf("message length = %d, limit = %d", len(message), maxWeComMarkdownBytes)
-	}
-	if !strings.Contains(message, "另有") {
-		t.Fatal("truncated message must report hidden accounts")
 	}
 }
 

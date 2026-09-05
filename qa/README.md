@@ -28,3 +28,10 @@ curl -X POST http://127.0.0.1:33888/control/101 -H 'Content-Type: application/js
 `internal/upstream/traffic_feeds_test.go` 使用独立编写的合成记录模拟三类管理接口，覆盖上游 503 被备用接替、最终 429、原生额度分类、重复记录、缺失总数和部分接口拒绝访问。`internal/app/operational_readiness_test.go` 在隔离 schema 中验证分组备用时效、换源隔离与声明覆盖；`internal/quality/traffic_coverage_test.go` 验证不完整成功证据不能解除风险。
 
 这些测试不调用真实供应商、不使用生产 Key。浏览器合成状态用于界面检查，原生 Sub2API 请求路径仍须另外验收。
+
+
+## 消息中心回归
+
+`notifications_test.go` 覆盖 033 迁移保留旧渠道/规则、订阅分发、单渠道失败重试、配置版本与租约、来源变化、涨价累计与余额恢复；`notification_webhooks_test.go` 使用独立 HMAC 向量和本地接收端验证飞书签名、业务回执、错误脱敏与禁止重定向。没有真实生产机器人地址参与测试。
+
+浏览器检查从旧 `/alerts` 入口跳转、停用状态保存飞书签名、配置本机通用接收端、测试消息送达与失败记录、修改渠道后的历史保留，以及桌面/手机布局。测试按钮确实会发送消息，浏览器验收必须使用本机模拟接收端。

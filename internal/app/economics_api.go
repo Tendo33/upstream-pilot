@@ -132,6 +132,9 @@ func (a *App) evaluateRunwayAlerts(ctx context.Context) error {
 		return err
 	}
 	for id, r := range runways {
+		if r.Status != "estimated" {
+			continue
+		} // Missing evidence cannot confirm recovery.
 		w, e := a.loadAccountWork(ctx, id, "")
 		if e != nil {
 			continue

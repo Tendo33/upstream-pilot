@@ -53,7 +53,7 @@ export function QualityPage(){
  }
  async function showHistory(row:QualityRow){setBusy(`${row.account.id}:history`);try{setHistory({row,data:await api<History>(`/quality/${row.account.id}/history`)})}catch(e){toast(errorMessage(e),"error")}finally{setBusy("")}}
  return <div className="page">
-  <PageHeader title="上游质量" description="把慢、错误、余额和成本变化变成可解释的优先级调整。" actions={<><Link className="button button-secondary" to="/operations">运行状态</Link><Link className="button button-secondary" to="/suppliers">供应商与成本</Link><Link className="button button-secondary" to="/service-checks">分组探测</Link><Link className="button button-secondary" to="/quality-alerts"><BellRing size={15}/>通知</Link><Button onClick={()=>void load()}><RefreshCw size={15}/>刷新</Button></>}/>
+  <PageHeader title="上游质量" description="把慢、错误、余额和成本变化变成可解释的优先级调整。" actions={<><Link className="button button-secondary" to="/operations">运行状态</Link><Link className="button button-secondary" to="/suppliers">供应商与成本</Link><Link className="button button-secondary" to="/service-checks">分组探测</Link><Link className="button button-secondary" to="/notifications"><BellRing size={15}/>消息中心</Link><Button onClick={()=>void load()}><RefreshCw size={15}/>刷新</Button></>}/>
   <div className="quality-intro"><Activity size={18}/><p><strong>默认只观察。</strong> 自动模式按组内顺序调整优先级；停调、负载系数和并发量分别开启。变慢或变贵的上游保留为备用。分组健康数仅代表已测账号，不代表供应商独立性或可承接容量。</p></div>
   {error&&<div className="quality-error" role="alert">{error}<Button onClick={()=>void load()}>重试</Button></div>}
   <section className="quality-groups" aria-label="分组备用情况">

@@ -9,10 +9,9 @@ const OperationsPage = lazy(() => import("./pages/OperationsPage").then(module =
 const SuppliersPage = lazy(() => import("./pages/SuppliersPage").then(module => ({default: module.SuppliersPage})));
 const ServiceChecksPage = lazy(() => import("./pages/ServiceChecksPage").then(module => ({default: module.ServiceChecksPage})));
 import { QualityPage } from "./pages/QualityPage";
-import { QualityAlertsPage } from "./pages/QualityAlertsPage";
+const MessageCenterPage = lazy(() => import("./pages/MessageCenterPage").then(module => ({default: module.MessageCenterPage})));
 import { AccountsPage } from "./pages/AccountsPage";
 import { AuthPage } from "./pages/AuthPage";
-import { BalanceAlertsPage } from "./pages/BalanceAlertsPage";
 import { EventsPage } from "./pages/EventsPage";
 import { GroupsPage } from "./pages/GroupsPage";
 import { OverviewPage } from "./pages/OverviewPage";
@@ -108,12 +107,13 @@ function AuthenticatedApp({ user, dark, setDark, onSessionEnded }: { user: User;
         <Route path="/operations" element={<RouteBoundary><Suspense fallback={<PageLoader/>}><OperationsPage/></Suspense></RouteBoundary>}/>
         <Route path="/suppliers" element={<RouteBoundary><Suspense fallback={<PageLoader/>}><SuppliersPage/></Suspense></RouteBoundary>}/>
         <Route path="/service-checks" element={<RouteBoundary><Suspense fallback={<PageLoader/>}><ServiceChecksPage /></Suspense></RouteBoundary>} />
-        <Route path="/quality-alerts" element={<QualityAlertsPage />} />
+        <Route path="/notifications" element={<RouteBoundary><Suspense fallback={<PageLoader/>}><MessageCenterPage/></Suspense></RouteBoundary>} />
+        <Route path="/quality-alerts" element={<Navigate to="/notifications" replace />} />
         <Route path="/sites" element={<SitesPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/groups" element={<GroupsPage />} />
         <Route path="/events" element={<EventsPage />} />
-        <Route path="/alerts" element={<BalanceAlertsPage />} />
+        <Route path="/alerts" element={<Navigate to="/notifications" replace />} />
         <Route path="/users" element={user.role === "admin" ? <UsersPage currentUser={user} /> : <Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
@@ -124,7 +124,7 @@ function AuthenticatedApp({ user, dark, setDark, onSessionEnded }: { user: User;
 function BootLoader() {
   return (
     <main className="boot-screen">
-      <div className="boot-brand"><span className="brand-mark"><span /></span><span className="brand-name">Upstream<span> Manager</span></span></div>
+      <div className="boot-brand"><span className="brand-mark"><span /></span><span className="brand-name">Upstream<span> Pilot</span></span></div>
       <LoaderCircle className="spin" size={19} aria-label="正在连接服务器" />
     </main>
   );

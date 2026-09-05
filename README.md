@@ -4,7 +4,7 @@
 
 Upstream Pilot 是 Tendo33 维护的 Sub2API 上游运营控制台。它同步账号与分组，采集探测、真实请求、余额和采购倍率，生成可解释的调度建议，并在明确启用后调整优先级与容量。
 
-[English](README.en.md) · [使用手册](docs/OPERATIONS.md) · [部署](docs/DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [整仓审查](docs/REVIEW.md) · [辅助能力改进路线](docs/SUB2API_COMPANION_REVIEW.md)
+[English](README.en.md) · [使用手册](docs/OPERATIONS.md) · [消息中心](docs/NOTIFICATIONS.md) · [部署](docs/DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [整仓审查](docs/REVIEW.md) · [辅助能力改进路线](docs/SUB2API_COMPANION_REVIEW.md)
 
 > 当前为预览版本，默认只观察。已知问题与验证边界以整仓审查为准，不能将本地模拟器通过等同于生产 SLA。
 
@@ -15,6 +15,7 @@ Upstream Pilot 是 Tendo33 维护的 Sub2API 上游运营控制台。它同步�
 - **看质量**：流式首字、请求耗时、错误类型、余额、采购倍率及历史变化。
 - **排顺序**：按分组和测试模型选择价格优先、速度优先或均衡，健康候选优先于降级候选。
 - **控动作**：优先级、停调、并发上限、负载系数分别控制，发现人工修改时停止覆盖。
+- **收告警**：飞书、企业微信和通用 Webhook 共用消息中心，按渠道订阅、去重、重试并查看业务回执。
 - **保留证据**：独立风险、恢复确认、数据时效、待确认写回、决策历史和通知投递状态。
 - **兼容上游**：对接 Sub2API 管理接口，并支持 NewAPI 来源的成本和余额信息。
 - **验证入口**：按模型和协议建立分组或账号档案，验证流式、工具结构、完整结束和预算。

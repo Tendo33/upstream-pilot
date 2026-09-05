@@ -138,6 +138,10 @@ func (s *qualityTestRemote) serve(w http.ResponseWriter, r *http.Request) {
 
 func newQualityIntegration(t *testing.T) (*App, AccountWork, *qualityTestRemote, string) {
 	t.Helper()
+	return newQualityIntegrationMigrating(t, database.Migrate)
+}
+func newQualityIntegrationMigrating(t *testing.T, migrate func(context.Context, *pgxpool.Pool) error) (*App, AccountWork, *qualityTestRemote, string) {
+	t.Helper()
 	dsn := os.Getenv("PILOT_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set PILOT_TEST_DATABASE_URL to run PostgreSQL integration tests")
@@ -166,7 +170,7 @@ func newQualityIntegration(t *testing.T) (*App, AccountWork, *qualityTestRemote,
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if err = database.Migrate(ctx, pool); err != nil {
+	if err = migrate(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
 	app, err := New(config.Config{MasterKey: make([]byte, 32), LogDir: t.TempDir(), AllowPrivateUpstreams: true, Workers: 2, PublicURL: "http://localhost"}, pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -344,20 +348,22 @@ func TestQualityInterruptedWriteRecoveryAndNotifications(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.db.Exec(ctx, `INSERT INTO quality_alert_settings(owner_id,enabled,webhook_ciphertext) VALUES($1,true,$2)`, w.OwnerID, sealed)
+	_, err = a.db.Exec(ctx, `INSERT INTO notification_channels(owner_id,name,provider,enabled,webhook_ciphertext,secret_purpose) VALUES($1,'test','webhook',true,$2,'quality-alert:'||$1::uuid::text)`, w.OwnerID, sealed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.sendQualityNotifications(ctx)
+	_, _ = a.db.Exec(ctx, `INSERT INTO notification_deliveries(event_id,channel_id,channel_revision) SELECT n.id,c.id,c.revision FROM quality_notifications n JOIN notification_channels c ON c.owner_id=n.owner_id ON CONFLICT DO NOTHING`)
+	a.sendNotifications(ctx, "")
 	var delivered int
-	if err = a.db.QueryRow(ctx, `SELECT count(*) FROM quality_notifications WHERE owner_id=$1 AND delivered_at IS NOT NULL`, w.OwnerID).Scan(&delivered); err != nil {
+	if err = a.db.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries d JOIN quality_notifications n ON n.id=d.event_id WHERE n.owner_id=$1 AND d.status='delivered'`, w.OwnerID).Scan(&delivered); err != nil {
 		t.Fatal(err)
 	}
 	if delivered < 1 || remote.notifications != delivered {
 		t.Fatalf("notifications=%d delivered=%d", remote.notifications, delivered)
 	}
 	before := remote.notifications
-	a.sendQualityNotifications(ctx)
+	_, _ = a.db.Exec(ctx, `INSERT INTO notification_deliveries(event_id,channel_id,channel_revision) SELECT n.id,c.id,c.revision FROM quality_notifications n JOIN notification_channels c ON c.owner_id=n.owner_id ON CONFLICT DO NOTHING`)
+	a.sendNotifications(ctx, "")
 	if remote.notifications != before {
 		t.Fatal("delivered event sent twice")
 	}
