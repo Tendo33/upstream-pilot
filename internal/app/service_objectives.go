@@ -12,6 +12,7 @@ import (
 
 type serviceObjectiveSummary struct {
 	ProfileID       string     `json:"profile_id"`
+	Name            string     `json:"name"`
 	GroupID         string     `json:"group_id"`
 	Source          string     `json:"source"`
 	Status          string     `json:"status"`
@@ -32,7 +33,7 @@ type serviceSample struct {
 }
 
 func evaluateServiceObjectives(p serviceProfileWork, samples []serviceSample, now time.Time) serviceObjectiveSummary {
-	s := serviceObjectiveSummary{ProfileID: p.ID, GroupID: p.GroupID, Source: "synthetic_group_entry", Status: "unknown", Reason: "等待足量的分组入口探测", CostStatus: "unknown"}
+	s := serviceObjectiveSummary{ProfileID: p.ID, Name: p.Config.Name, GroupID: p.GroupID, Source: "synthetic_group_entry", Status: "unknown", Reason: "等待足量的分组入口探测", CostStatus: "unknown"}
 	if p.AccountID != "" {
 		s.Source = "account_direct"
 		s.Reason = "等待直接来源协议样本"

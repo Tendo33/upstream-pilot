@@ -23,6 +23,15 @@ func TestServiceObjectivesDoNotHideUnconfirmedRequests(t *testing.T) {
 	}
 }
 
+func TestServiceObjectiveKeepsProfileNameForOperatorReadback(t *testing.T) {
+	p := serviceProfileWork{ID: "profile-1", Config: defaultServiceProfile()}
+	p.Config.Name = "生产 Responses 分组"
+	got := evaluateServiceObjectives(p, nil, time.Now().UTC())
+	if got.Name != p.Config.Name {
+		t.Fatalf("profile name = %q, want %q", got.Name, p.Config.Name)
+	}
+}
+
 func TestServiceObjectivesDoNotInventBufferedTTFT(t *testing.T) {
 	now := time.Now().UTC()
 	p := serviceProfileWork{Config: defaultServiceProfile()}

@@ -55,6 +55,21 @@ func TestSub2ClientNormalizesAdminEndpointAndHeaders(t *testing.T) {
 	}
 }
 
+func TestNormalizePaymentStatus(t *testing.T) {
+	for input, want := range map[string]string{"PENDING": "pending", "PAID": "paid", "RECHARGING": "recharging", "COMPLETED": "completed", "EXPIRED": "expired", "FAILED": "failed", "cancelled": "cancelled", "other": "unknown"} {
+		if got := NormalizePaymentStatus(input); got != want {
+			t.Errorf("%q -> %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestSummarizePaymentOrders(t *testing.T) {
+	s := SummarizePaymentOrders([]PaymentOrder{{Status: "PAID", Amount: 10}, {Status: "COMPLETED", Amount: 20}, {Status: "FAILED", Amount: 3}})
+	if s.CountByStatus["paid"] != 1 || s.AmountByStatus["completed"] != 20 || s.CountByStatus["failed"] != 1 {
+		t.Fatalf("unexpected summary: %+v", s)
+	}
+}
+
 func TestSub2ClientListAccountsFollowsReportedTotal(t *testing.T) {
 	var mu sync.Mutex
 	pages := make([]int, 0, 2)

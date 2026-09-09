@@ -10,6 +10,9 @@ const SuppliersPage = lazy(() => import("./pages/SuppliersPage").then(module => 
 const ServiceChecksPage = lazy(() => import("./pages/ServiceChecksPage").then(module => ({default: module.ServiceChecksPage})));
 import { QualityPage } from "./pages/QualityPage";
 const MessageCenterPage = lazy(() => import("./pages/MessageCenterPage").then(module => ({default: module.MessageCenterPage})));
+const BillingAuditPage = lazy(() => import("./pages/BillingAuditPage").then(module => ({default: module.BillingAuditPage})));
+const RedemptionsPage = lazy(() => import("./pages/RedemptionsPage").then(module => ({default: module.RedemptionsPage})));
+const RiskPage = lazy(() => import("./pages/RiskPage").then(module => ({default: module.RiskPage})));
 import { AccountsPage } from "./pages/AccountsPage";
 import { AuthPage } from "./pages/AuthPage";
 import { EventsPage } from "./pages/EventsPage";
@@ -108,6 +111,9 @@ function AuthenticatedApp({ user, dark, setDark, onSessionEnded }: { user: User;
         <Route path="/suppliers" element={<RouteBoundary><Suspense fallback={<PageLoader/>}><SuppliersPage/></Suspense></RouteBoundary>}/>
         <Route path="/service-checks" element={<RouteBoundary><Suspense fallback={<PageLoader/>}><ServiceChecksPage /></Suspense></RouteBoundary>} />
         <Route path="/notifications" element={<RouteBoundary><Suspense fallback={<PageLoader/>}><MessageCenterPage/></Suspense></RouteBoundary>} />
+        <Route path="/billing" element={<RouteBoundary><Suspense fallback={<PageLoader/>}><BillingAuditPage/></Suspense></RouteBoundary>} />
+        <Route path="/redemptions" element={<RouteBoundary><Suspense fallback={<PageLoader/>}><RedemptionsPage/></Suspense></RouteBoundary>} />
+        <Route path="/risk" element={<RouteBoundary><Suspense fallback={<PageLoader/>}><RiskPage/></Suspense></RouteBoundary>} />
         <Route path="/quality-alerts" element={<Navigate to="/notifications" replace />} />
         <Route path="/sites" element={<SitesPage />} />
         <Route path="/accounts" element={<AccountsPage />} />

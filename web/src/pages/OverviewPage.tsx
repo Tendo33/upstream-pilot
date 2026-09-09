@@ -20,6 +20,22 @@ interface OverviewData {
   overview: Overview;
   events: AuditEvent[];
   sites: Site[];
+  objectives: ServiceObjective[];
+}
+
+interface ServiceObjective {
+  profile_id: string;
+  name: string;
+  group_id: string;
+  source: string;
+  status: string;
+  reason: string;
+  samples: number;
+  unconfirmed: number;
+  success_percent: number | null;
+  complete_percent: number | null;
+  first_content_p95_ms: number | null;
+  latest_at: string | null;
 }
 
 const actionNames: Record<string, string> = {
@@ -43,6 +59,10 @@ const actionNames: Record<string, string> = {
   "user.update": "更新用户",
   "user.delete": "删除用户",
   "audit_log.settings.update": "更新日志保留",
+  "quality.control": "执行质量调度",
+  "quality.release": "停止质量接管",
+  "controller.failure": "控制写回失败",
+  "notification.retry": "重试消息投递",
 };
 
 export function eventActionName(action: string): string {
@@ -61,15 +81,16 @@ export function OverviewPage() {
     setError("");
     setRefreshing(quiet);
     try {
-      const [overview, sites] = await Promise.all([
+      const [overview, sites, objectives] = await Promise.all([
         api<Overview>("/overview"),
         api<Site[]>("/sites"),
+        api<ServiceObjective[]>("/service-objectives").catch(() => []),
       ]);
-      setData((current) => current && quiet ? { ...current, overview, sites } : { overview, events: [], sites });
+      setData((current) => current && quiet ? { ...current, overview, sites, objectives } : { overview, events: [], sites, objectives });
       setEventsLoading(true);
       try {
         const eventPage = await api<AuditEventPage>("/events?page=1&page_size=8");
-        setData((current) => current ? { ...current, events: eventPage.items } : { overview, events: eventPage.items, sites });
+        setData((current) => current ? { ...current, events: eventPage.items } : { overview, events: eventPage.items, sites, objectives });
       } catch {
         // Recent events are auxiliary; keep the rest of the overview visible.
       } finally {
@@ -88,7 +109,7 @@ export function OverviewPage() {
   if (!data && !error) return <PageLoader />;
   if (!data) return <ErrorState message={error} retry={() => void load()} />;
 
-  const { overview, events, sites } = data;
+  const { overview, events, sites, objectives } = data;
   const healthTotal = overview.healthy + overview.failing + overview.paused;
   const healthPercent = healthTotal ? (overview.healthy / healthTotal) * 100 : 0;
   const failingPercent = healthTotal ? (overview.failing / healthTotal) * 100 : 0;
@@ -170,6 +191,20 @@ export function OverviewPage() {
         </div>
       )}
 
+      {objectives.length > 0 && <section className="panel recent-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>分组服务目标</h2>
+            <p>合成入口最近 24 小时的验证结果</p>
+          </div>
+          <Link className="text-link" to="/service-checks">管理探测档案 <ArrowUpRight size={14} /></Link>
+        </div>
+        <div className="service-objective-grid">
+          {objectives.slice(0, 6).map((objective) => <ObjectiveCard key={objective.profile_id} objective={objective} />)}
+        </div>
+        {objectives.length > 6 && <p className="quality-note">还有 {objectives.length - 6} 个档案，请前往服务探测查看全部。</p>}
+      </section>}
+
       <section className="panel recent-panel">
         <div className="panel-heading">
           <div>
@@ -204,6 +239,21 @@ export function OverviewPage() {
       </section>
     </div>
   );
+}
+
+function ObjectiveCard({ objective }: { objective: ServiceObjective }) {
+  const statusLabel = objective.status === "healthy" ? "达标" : objective.status === "degraded" ? "未达标" : objective.status === "partial" ? "部分达标" : "待验证";
+  const statusTone = objective.status === "healthy" ? "success" : objective.status === "degraded" ? "danger" : objective.status === "partial" ? "warning" : "neutral";
+  return <article className="service-objective-card">
+    <div className="panel-heading"><div><strong>{objective.name || (objective.source === "synthetic_group_entry" ? "分组入口" : "账号直连")}</strong><small className="quality-note">{objective.source === "synthetic_group_entry" ? "分组入口" : "账号直连"}</small></div><Badge tone={statusTone}>{statusLabel}</Badge></div>
+    <div className="service-objective-metrics">
+      <span><strong>{objective.success_percent == null ? "未知" : `${objective.success_percent.toFixed(1)}%`}</strong><small>成功率</small></span>
+      <span><strong>{objective.first_content_p95_ms == null ? "未知" : `${objective.first_content_p95_ms} ms`}</strong><small>首字 P95</small></span>
+      <span><strong>{objective.samples}</strong><small>有效样本</small></span>
+    </div>
+    <p className="quality-reason">{objective.reason}</p>
+    {objective.unconfirmed > 0 && <p className="quality-note">{objective.unconfirmed} 个请求尚未确认</p>}
+  </article>;
 }
 
 function Metric({ label, value, note, icon, tone = "neutral" }: { label: string; value: number; note: string; icon: React.ReactNode; tone?: string }) {

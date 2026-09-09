@@ -16,7 +16,7 @@ func (a *App) operationsHandler(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	err = a.db.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(v),'[]') FROM(SELECT l.kind,l.resource_type,l.resource_id,l.started_at,l.finished_at,(SELECT max(ok.finished_at) FROM task_runs ok WHERE ok.owner_id=l.owner_id AND ok.resource_type=l.resource_type AND ok.resource_id=l.resource_id AND ok.kind=l.kind AND ok.success) AS last_success_at,l.duration_ms,l.last_error,l.finished_at IS NULL AS running FROM task_runs l WHERE l.owner_id=$1 ORDER BY l.started_at DESC LIMIT 30)v`, owner.ID).Scan(&tasks)
+	err = a.db.QueryRow(r.Context(), `SELECT COALESCE(jsonb_agg(v),'[]') FROM(SELECT l.kind,l.resource_type,l.resource_id,l.started_at,l.finished_at,(SELECT max(ok.finished_at) FROM task_runs ok WHERE ok.owner_id=l.owner_id AND ok.resource_type=l.resource_type AND ok.resource_id=l.resource_id AND ok.kind=l.kind AND ok.success) AS last_success_at,l.duration_ms,l.last_error,l.finished_at IS NULL AS running,GREATEST(0,EXTRACT(EPOCH FROM now()-l.started_at))::bigint AS running_seconds,(l.finished_at IS NULL AND now()-l.started_at>interval '90 seconds') AS stale FROM task_runs l WHERE l.owner_id=$1 ORDER BY l.started_at DESC LIMIT 30)v`, owner.ID).Scan(&tasks)
 	if err != nil {
 		return err
 	}

@@ -1,7 +1,11 @@
 .DEFAULT_GOAL := help
-.PHONY: help web build test integration run demo-upstream release
+.PHONY: help web build test integration run demo-upstream release docker-up docker-down
 help:
 	@printf '%s\n' 'make build       Build UI and executable' 'make test        Build UI and run Go tests' 'make integration Run PostgreSQL integration and race tests' 'make run         Run with exported PILOT_* configuration' 'make demo-upstream Start local upstream simulator' 'make release     Linux release (TARGET_ARCH=amd64 or arm64)'
+docker-up:
+	docker compose up -d --build
+docker-down:
+	docker compose down
 web:
 	npm --prefix web ci --prefer-offline --fetch-timeout=20000 --fetch-retries=1
 	npm --prefix web run build

@@ -89,3 +89,36 @@ func TestOperationsShowsExpiredAndDisabledBillingCoverage(t *testing.T) {
 		t.Fatal(changes, err)
 	}
 }
+
+func TestOperationsMarksLongRunningTaskAsStale(t *testing.T) {
+	a, w, _, _ := newQualityIntegration(t)
+	engineRegressionSQL(t, a, `INSERT INTO task_runs(id,owner_id,resource_type,resource_id,kind,started_at) VALUES(gen_random_uuid(),$1,'site',$2,'inventory',now()-interval '2 minutes' - interval '1 second')`, w.OwnerID, w.SiteID)
+	out := httptest.NewRecorder()
+	if err := a.operationsHandler(out, qualityHandlerRequest("GET", "/operations", "", w.OwnerID, "")); err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Data struct {
+			Tasks []struct {
+				Running        bool  `json:"running"`
+				Stale          bool  `json:"stale"`
+				RunningSeconds int64 `json:"running_seconds"`
+			} `json:"tasks"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Data.Tasks) != 1 || !response.Data.Tasks[0].Running || !response.Data.Tasks[0].Stale || response.Data.Tasks[0].RunningSeconds < 120 {
+		t.Fatalf("unexpected stale task: %s", out.Body.String())
+	}
+}
+
+func TestMaskRedeemCodeNeverReturnsShortCodeInFull(t *testing.T) {
+	if got := maskRedeemCode("abcdef123456"); got != "abc******456" {
+		t.Fatalf("masked code = %q", got)
+	}
+	if got := maskRedeemCode("short"); got != "******" {
+		t.Fatalf("short code = %q", got)
+	}
+}

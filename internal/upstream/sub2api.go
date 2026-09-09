@@ -206,6 +206,141 @@ type AccountUsageStats struct {
 	TotalCacheReadTokens     int64 `json:"total_cache_read_tokens"`
 }
 
+// PaymentOrder is the stable, non-sensitive subset exposed by Sub2API's
+// administrator payment endpoint. Unknown fields are intentionally ignored so
+// newer upstream versions can be consumed without leaking provider payloads.
+type PaymentOrder struct {
+	ID               int64      `json:"id"`
+	UserID           int64      `json:"user_id"`
+	Status           string     `json:"status"`
+	OrderType        string     `json:"order_type"`
+	PaymentType      string     `json:"payment_type"`
+	Amount           float64    `json:"amount"`
+	Currency         string     `json:"currency"`
+	CreatedAt        *time.Time `json:"created_at"`
+	PaidAt           *time.Time `json:"paid_at"`
+	CompletedAt      *time.Time `json:"completed_at"`
+	NormalizedStatus string     `json:"normalized_status,omitempty"`
+}
+
+type PaymentOrderPage struct {
+	Items []PaymentOrder `json:"items"`
+	Total int            `json:"total"`
+}
+
+type PaymentOrderSummary struct {
+	CountByStatus  map[string]int     `json:"count_by_status"`
+	AmountByStatus map[string]float64 `json:"amount_by_status"`
+}
+
+type RedeemCode struct {
+	ID        int64      `json:"id"`
+	Code      string     `json:"code"`
+	Type      string     `json:"type"`
+	Status    string     `json:"status"`
+	Value     float64    `json:"value"`
+	UsedBy    *int64     `json:"used_by"`
+	ExpiresAt *time.Time `json:"expires_at"`
+	CreatedAt *time.Time `json:"created_at"`
+}
+
+type RedeemCodePage struct {
+	Items []RedeemCode `json:"items"`
+	Total int          `json:"total"`
+}
+
+func (c *Sub2Client) ListRedeemCodes(ctx context.Context, page, pageSize int) (RedeemCodePage, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 100
+	}
+	query := url.Values{"page": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(pageSize)}}
+	raw, err := c.request(ctx, http.MethodGet, "/redeem-codes?"+query.Encode(), nil, "application/json")
+	if err != nil {
+		return RedeemCodePage{}, err
+	}
+	var direct RedeemCodePage
+	if json.Unmarshal(raw, &direct) == nil && direct.Items != nil {
+		return direct, nil
+	}
+	var envelope struct {
+		Data RedeemCodePage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return RedeemCodePage{}, fmt.Errorf("decode redeem codes: %w", err)
+	}
+	return envelope.Data, nil
+}
+
+func SummarizePaymentOrders(items []PaymentOrder) PaymentOrderSummary {
+	s := PaymentOrderSummary{CountByStatus: map[string]int{}, AmountByStatus: map[string]float64{}}
+	for _, item := range items {
+		status := item.NormalizedStatus
+		if status == "" {
+			status = NormalizePaymentStatus(item.Status)
+		}
+		s.CountByStatus[status]++
+		s.AmountByStatus[status] += item.Amount
+	}
+	return s
+}
+
+func (c *Sub2Client) ListPaymentOrders(ctx context.Context, page, pageSize int) (PaymentOrderPage, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 100
+	}
+	query := url.Values{"page": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(pageSize)}}
+	raw, err := c.request(ctx, http.MethodGet, "/payment/orders?"+query.Encode(), nil, "application/json")
+	if err != nil {
+		return PaymentOrderPage{}, err
+	}
+	var pageResult PaymentOrderPage
+	if err := json.Unmarshal(raw, &pageResult); err == nil && pageResult.Items != nil {
+		normalizePaymentOrders(pageResult.Items)
+		return pageResult, nil
+	}
+	var envelope struct {
+		Data PaymentOrderPage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return PaymentOrderPage{}, fmt.Errorf("decode payment orders: %w", err)
+	}
+	normalizePaymentOrders(envelope.Data.Items)
+	return envelope.Data, nil
+}
+
+func normalizePaymentOrders(items []PaymentOrder) {
+	for i := range items {
+		items[i].NormalizedStatus = NormalizePaymentStatus(items[i].Status)
+	}
+}
+
+func NormalizePaymentStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "pending":
+		return "pending"
+	case "paid":
+		return "paid"
+	case "recharging", "recharge", "processing":
+		return "recharging"
+	case "completed", "complete", "success":
+		return "completed"
+	case "expired", "timeout":
+		return "expired"
+	case "failed", "failure":
+		return "failed"
+	case "cancelled", "canceled":
+		return "cancelled"
+	default:
+		return "unknown"
+	}
+}
+
 func NewSub2Client(rawURL, apiKey string, client *http.Client) (*Sub2Client, error) {
 	baseURL, err := NormalizeBaseURL(rawURL)
 	if err != nil {

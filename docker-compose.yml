@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pilot}
+      POSTGRES_USER: ${POSTGRES_USER:-pilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pilot-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  pilot:
+    build: .
+    image: ${PILOT_IMAGE:-upstream-pilot:local}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      PILOT_DATABASE_URL: postgres://${POSTGRES_USER:-pilot}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pilot}?sslmode=disable
+      PILOT_LISTEN_ADDR: 0.0.0.0:33777
+      PILOT_LOG_DIR: /var/lib/upstream-pilot/logs
+    ports:
+      - "${PILOT_PORT:-33777}:33777"
+    volumes:
+      - pilot-data:/var/lib/upstream-pilot
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  pilot-db:
+  pilot-data:

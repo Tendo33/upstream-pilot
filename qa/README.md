@@ -22,6 +22,8 @@ curl -X POST http://127.0.0.1:33888/control/101 -H 'Content-Type: application/js
 
 截图与运行数据属于忽略的 `output/`、`.local/` 和 `.playwright-cli/`。文档使用截图时只采用本项目生成的合成数据画面。
 
+完整的隔离故障注入、恢复、租约和通过条件见 [故障恢复演练](../docs/RECOVERY_DRILL.md)。
+
 
 ## 真实请求契约回归
 

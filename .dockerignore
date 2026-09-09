@@ -1,0 +1,15 @@
+.git
+.github
+.local
+.playwright-cli
+node_modules
+web/node_modules
+web/dist
+internal/web/dist
+output
+*.log
+.env
+.env.*
+!.env.example
+Dockerfile
+docker-compose.yml

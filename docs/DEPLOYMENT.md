@@ -1,5 +1,45 @@
 # 部署 Upstream Pilot
 
+## Docker Compose（推荐）
+
+这是面向 Sub2API 用户的最简单部署方式。需要一台安装 Docker Engine 和 Compose v2 的服务器。
+
+全新 Linux 服务器可以直接使用安装脚本：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Tendo33/upstream-pilot/main/install.sh)
+```
+
+脚本会克隆或更新项目、生成 PostgreSQL 密码和 Pilot 主密钥、创建 `.env` 并启动 Compose；不会删除已有数据卷。
+
+正式版本发布后，可以在 `.env` 设置 `PILOT_IMAGE=docker.io/simonsun3/upstream-pilot:latest`，使用已发布镜像；
+默认配置仍会本地构建，便于开发和内网环境使用。GitHub Actions 仅在 `v*.*.*` tag 发布多架构镜像，
+需要仓库 Secrets `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN`。
+
+```bash
+git clone https://github.com/Tendo33/upstream-pilot.git
+cd upstream-pilot
+cp .env.docker.example .env
+openssl rand -base64 32
+```
+
+把生成的值分别填入 `.env` 的 `PILOT_MASTER_KEY`，并设置一个随机的
+`POSTGRES_PASSWORD`，然后启动：
+
+```bash
+docker compose up -d --build
+docker compose ps
+curl http://127.0.0.1:33777/healthz
+curl http://127.0.0.1:33777/readyz
+```
+
+浏览器访问 `PILOT_PUBLIC_URL`（默认 `http://localhost:33777`）创建管理员。
+PostgreSQL 数据保存在 `pilot-db`，审计日志和运行数据保存在 `pilot-data`。
+不要执行 `docker compose down -v`，这会删除数据库和 Pilot 数据卷。
+
+生产环境应在前面加 HTTPS 反向代理，并将 `PILOT_PUBLIC_URL` 改为 HTTPS 地址，
+同时设置 `PILOT_COOKIE_SECURE=true`。Compose 只发布 Pilot 端口，数据库不对宿主机开放。
+
 ## 配置
 
 从 `.env.example` 复制配置，至少设置：
