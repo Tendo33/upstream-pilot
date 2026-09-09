@@ -11,15 +11,16 @@ import {
   Moon,
   Server,
   ShieldAlert,
-  SlidersHorizontal,
+  ChevronDown,
+  Check,
   Ticket,
   Sun,
   UsersRound,
   Zap,
 } from "lucide-react";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { useEffect, useState, type ReactNode } from "react";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import { api } from "../api";
 import type { User, VersionStatus } from "../types";
 import { cx } from "./ui";
@@ -32,62 +33,38 @@ interface AppShellProps {
   children: ReactNode;
 }
 
-const commonLinks = [
-  { to: "/", label: "质量", icon: Activity, end: true },
-  { to: "/overview", label: "总览", icon: LayoutDashboard },
-  { to: "/sites", label: "站点", icon: Server },
-  { to: "/accounts", label: "账号", icon: Database },
-  { to: "/accounts", label: "控制策略", icon: SlidersHorizontal },
-  { to: "/groups", label: "分组", icon: Layers3 },
-  { to: "/notifications", label: "消息", icon: BellRing },
-  { to: "/events", label: "活动日志", icon: Activity },
-  { to: "/billing", label: "充值审计", icon: CreditCard },
-  { to: "/redemptions", label: "兑换码", icon: Ticket },
-  { to: "/risk", label: "运营风控", icon: ShieldAlert },
-  { to: "/operations", label: "运行状态", icon: Activity },
-  { to: "/service-checks", label: "服务探测", icon: Zap },
+const navigationGroups = [
+  { id: "resources", label: "资源管理", links: [
+    { to: "/sites", label: "站点", description: "接入与同步上游", icon: Server },
+    { to: "/accounts", label: "账号与控制", description: "账号配置、自动策略与恢复", icon: Database },
+    { to: "/groups", label: "分组", description: "分组策略与售价倍率", icon: Layers3 },
+    { to: "/suppliers", label: "供应商与成本", description: "来源、采购成本与余额续航", icon: CreditCard },
+  ] },
+  { id: "business", label: "运营管理", links: [
+    { to: "/overview", label: "总览", description: "站点运营概况", icon: LayoutDashboard },
+    { to: "/billing", label: "充值审计", description: "核对充值记录", icon: CreditCard },
+    { to: "/redemptions", label: "兑换码", description: "查看使用状态与额度", icon: Ticket },
+    { to: "/risk", label: "运营风控", description: "检查运营风险", icon: ShieldAlert },
+  ] },
+  { id: "monitoring", label: "监控", links: [
+    { to: "/service-checks", label: "服务探测", description: "验证模型、流式与工具能力", icon: Zap },
+    { to: "/operations", label: "运行状态", description: "采集、任务与进程健康", icon: Activity },
+    { to: "/notifications", label: "消息中心", description: "告警、订阅与投递回执", icon: BellRing },
+    { to: "/events", label: "活动日志", description: "追溯操作与执行记录", icon: Activity },
+  ] },
 ];
 
-type DockItem = `nav:${string}` | "github" | "theme" | "account";
-
-function dockLabelStyle(label: string): CSSProperties {
-  return { "--dock-label-width": `${Array.from(label).length}em` } as CSSProperties;
-}
-
 export function AppShell({ user, dark, onToggleTheme, onLogout, children }: AppShellProps) {
-  const [expandedItem, setExpandedItem] = useState<DockItem | null>(null);
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
   const [versionStatus, setVersionStatus] = useState<VersionStatus | null>(null);
-  const collapseTimer = useRef<number | null>(null);
-  const links = user.role === "admin"
-    ? [...commonLinks, { to: "/users", label: "用户", icon: UsersRound }]
-    : commonLinks;
+  const { pathname } = useLocation();
+
+  useEffect(() => { setOpenGroup(null); setAccountOpen(false); }, [pathname]);
   const roleLabel = user.role === "admin" ? "管理员" : "用户";
   const githubLabel = versionStatus?.update_available && versionStatus.latest_version
     ? `发现新版本 ${versionStatus.latest_version}`
     : "GitHub";
-
-  const clearCollapseTimer = useCallback(() => {
-    if (collapseTimer.current !== null) {
-      window.clearTimeout(collapseTimer.current);
-      collapseTimer.current = null;
-    }
-  }, []);
-
-  const expandDockItem = useCallback((item: DockItem) => {
-    clearCollapseTimer();
-    setExpandedItem(item);
-  }, [clearCollapseTimer]);
-
-  const scheduleDockCollapse = useCallback((item: DockItem) => {
-    clearCollapseTimer();
-    collapseTimer.current = window.setTimeout(() => {
-      setExpandedItem((current) => current === item ? null : current);
-      collapseTimer.current = null;
-    }, 90);
-  }, [clearCollapseTimer]);
-
-  useEffect(() => clearCollapseTimer, [clearCollapseTimer]);
 
   useEffect(() => {
     let active = true;
@@ -99,13 +76,6 @@ export function AppShell({ user, dark, onToggleTheme, onLogout, children }: AppS
     return () => { active = false; };
   }, []);
 
-  const dockInteractions = (item: DockItem) => ({
-    onPointerEnter: () => expandDockItem(item),
-    onPointerLeave: () => scheduleDockCollapse(item),
-    onFocus: () => expandDockItem(item),
-    onBlur: () => scheduleDockCollapse(item),
-  });
-
   return (
     <div className="app-shell">
       <header className="top-nav-shell">
@@ -114,77 +84,85 @@ export function AppShell({ user, dark, onToggleTheme, onLogout, children }: AppS
           <span className="top-nav-divider" aria-hidden="true" />
 
           <nav className="nav-list" aria-label="主导航">
-            {links.map(({ to, label, icon: Icon, ...link }) => {
-              const item = `nav:${to}` as const;
-              return (
-                <NavLink
-                  to={to}
-                  end={"end" in link ? link.end : false}
-                  className={({ isActive }) => cx("nav-link", isActive && "nav-link-active", expandedItem === item && "dock-item-expanded")}
-                  style={dockLabelStyle(label)}
-                  aria-label={label}
-                  title={label}
-                  key={to}
-                  {...dockInteractions(item)}
-                >
-                  <Icon size={17} strokeWidth={1.8} aria-hidden="true" />
-                  <span className="nav-link-label">{label}</span>
-                </NavLink>
-              );
+            <NavLink to="/" end className={({ isActive }) => cx("nav-link", isActive && "nav-link-active")}>
+              <Activity size={17} strokeWidth={1.8} aria-hidden="true" /><span>质量</span>
+            </NavLink>
+            {navigationGroups.map((group) => {
+              const active = group.links.some((link) => link.to === pathname);
+              return <PopoverPrimitive.Root key={group.id} open={openGroup === group.id}
+                onOpenChange={(open) => { setOpenGroup(open ? group.id : null); if (open) setAccountOpen(false); }}>
+                <PopoverPrimitive.Trigger asChild>
+                  <button type="button" className={cx("nav-link", active && "nav-link-active")} aria-label={group.label}>
+                    <span>{group.label}</span><ChevronDown className="nav-chevron" size={13} aria-hidden="true" />
+                  </button>
+                </PopoverPrimitive.Trigger>
+                <PopoverPrimitive.Portal>
+                  <PopoverPrimitive.Content className="nav-group-menu" aria-label={group.label} align="start" sideOffset={10} collisionPadding={12}>
+                    <nav aria-label={group.label}>
+                      {group.links.map(({ to, label, description, icon: Icon }) => <NavLink key={to} to={to}
+                        onClick={() => setOpenGroup(null)}
+                        className={({ isActive }) => cx("nav-group-link", isActive && "nav-group-link-active")}>
+                        <Icon size={17} strokeWidth={1.8} aria-hidden="true" />
+                        <span><strong>{label}</strong><small>{description}</small></span>
+                        {pathname === to && <Check size={14} aria-hidden="true" />}
+                      </NavLink>)}
+                    </nav>
+                  </PopoverPrimitive.Content>
+                </PopoverPrimitive.Portal>
+              </PopoverPrimitive.Root>;
             })}
           </nav>
 
           <span className="top-nav-divider" aria-hidden="true" />
           <div className="top-nav-actions">
             <a
-              className={cx("top-nav-action", "top-nav-github", expandedItem === "github" && "dock-item-expanded")}
+              className="top-nav-action top-nav-github"
               href="https://github.com/Tendo33/upstream-pilot"
               target="_blank"
               rel="noopener noreferrer"
-              style={dockLabelStyle("GitHub")}
+
               aria-label={githubLabel}
               title={githubLabel}
-              {...dockInteractions("github")}
+
             >
               <span className="top-nav-action-icon">
                 <Github size={17} aria-hidden="true" />
                 {versionStatus?.update_available && <span className="top-nav-update-dot" aria-hidden="true" />}
               </span>
-              <span className="top-nav-action-label">GitHub</span>
+
             </a>
 
             <button
-              className={cx("top-nav-action", expandedItem === "theme" && "dock-item-expanded")}
+              className="top-nav-action"
               type="button"
-              style={dockLabelStyle(dark ? "浅色" : "暗色")}
+
               aria-label={dark ? "切换至浅色" : "切换至暗色"}
               title={dark ? "切换至浅色" : "切换至暗色"}
               onClick={onToggleTheme}
-              {...dockInteractions("theme")}
+
             >
               {dark ? <Sun size={17} aria-hidden="true" /> : <Moon size={17} aria-hidden="true" />}
-              <span className="top-nav-action-label">{dark ? "浅色" : "暗色"}</span>
+
             </button>
 
             <PopoverPrimitive.Root
               open={accountOpen}
               onOpenChange={(open) => {
                 setAccountOpen(open);
-                if (open) expandDockItem("account");
-                else scheduleDockCollapse("account");
+                if (open) setOpenGroup(null);
               }}
             >
               <PopoverPrimitive.Trigger asChild>
                 <button
-                  className={cx("top-nav-account-trigger", (expandedItem === "account" || accountOpen) && "dock-item-expanded")}
+                  className="top-nav-account-trigger"
                   type="button"
-                  style={dockLabelStyle("账户")}
+
                   aria-label={`账户：${user.email}，${roleLabel}`}
                   title={`${user.email} · ${roleLabel}`}
-                  {...dockInteractions("account")}
+
                 >
                   <span className="avatar" aria-hidden="true">{user.email.slice(0, 1).toUpperCase()}</span>
-                  <span className="top-nav-action-label">账户</span>
+
                 </button>
               </PopoverPrimitive.Trigger>
               <PopoverPrimitive.Portal>
@@ -201,6 +179,9 @@ export function AppShell({ user, dark, onToggleTheme, onLogout, children }: AppS
                       <small>{roleLabel}</small>
                     </span>
                   </div>
+                  {user.role === "admin" && <Link className="nav-account-users" to="/users" onClick={() => setAccountOpen(false)}>
+                    <UsersRound size={16} aria-hidden="true" /><span>用户管理</span>
+                  </Link>}
                   {versionStatus && (
                     <a
                       className="top-nav-version"
