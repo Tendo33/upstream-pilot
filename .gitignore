@@ -20,3 +20,8 @@ coverage.out
 /.playwright-cli/
 /output/
 /.impeccable/review/
+# >>> Comet managed project state >>>
+!/.comet/
+/.comet/*
+!/.comet/config.yaml
+# <<< Comet managed project state <<<
