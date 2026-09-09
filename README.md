@@ -6,6 +6,15 @@ Upstream Pilot 是 Tendo33 维护的 Sub2API 上游运营控制台。它同步�
 
 [English](README.en.md) · [使用手册](docs/OPERATIONS.md) · [消息中心](docs/NOTIFICATIONS.md) · [部署](docs/DEPLOYMENT.md) · [架构](docs/ARCHITECTURE.md) · [整仓审查](docs/REVIEW.md) · [故障恢复演练](docs/RECOVERY_DRILL.md) · [辅助能力改进路线](docs/SUB2API_COMPANION_REVIEW.md)
 
+## Pilot 适合回答什么问题？
+
+- **哪个上游值得保留？** 按分组查看真实请求成功率、流式首字、完整结束、工具结构和失败原因。
+- **哪个账号可以作为备用？** 结合凭据、额度、模型、容量和供应商独立性；证据不足时明确显示“未知”。
+- **成本和余额还能撑多久？** 按统一计价基础记录倍率、用量、余额和续航；来源不一致时不强行比较。
+- **自动调整是否安全？** 每项控制独立启用，保留人工基准、冲突检测、动作历史和停止/还原入口。
+
+Pilot 是 Sub2API 的运营辅佐，不是请求代理。会话绑定、重试、实际流量选择和用户售价仍由 Sub2API 负责。
+
 > 当前为预览版本，默认只观察。已知问题与验证边界以整仓审查为准，不能将本地模拟器通过等同于生产 SLA。
 
 ![Upstream Pilot 本地模拟数据界面](docs/assets/quality.png)
@@ -45,6 +54,22 @@ make build
 
 默认仅监听 `127.0.0.1:33777`。打开浏览器创建管理员，再添加 Sub2API 站点。主密钥用于解密保存的管理凭据，需要与数据库一起备份。
 
+### Docker 快速开始
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Tendo33/upstream-pilot/main/install.sh -o install.sh
+bash install.sh
+```
+
+安装脚本只负责首次安装和保留已有数据。升级使用指定版本，失败时可回滚：
+
+```bash
+./scripts/upgrade.sh <git-ref>
+./scripts/rollback.sh <git-ref>
+```
+
+生产环境请把 `PILOT_PUBLIC_URL` 设为 HTTPS 地址，开启 `PILOT_COOKIE_SECURE=true`，并将 Pilot 与 Sub2API 的数据库、Redis 和持久化目录分开。
+
 ## 从观察到控制
 
 1. 添加站点并同步库存，为账号选择实际支持的模型。
@@ -64,6 +89,26 @@ make demo-upstream
 ```
 
 数据库测试创建并清理自己的随机 schema。未提供测试数据库时，集成用例会跳过。模拟器只监听本机，使用公开测试 Key `test-admin-key`，不连接真实供应商。详见 [QA 手册](qa/README.md)。
+
+## 推荐上手路径
+
+1. 启动 Pilot，创建管理员并添加 Sub2API 站点。
+2. 测试连接并同步账号、分组和模型映射。
+3. 创建服务探测档案，先保持观察模式，等待有效样本。
+4. 检查来源、容量、成本和供应商独立性证据。
+5. 需要控制时，按账号单独启用优先级、停调、并发或负载策略。
+
+容器健康、`/healthz`、`/readyz`、账号数量或 `/v1/models` 都不能单独证明上游可用；生产接管前应完成真实请求、流式、工具、重复请求、路由和计费验证。
+
+## 文档导航
+
+| 目标 | 文档 |
+| --- | --- |
+| 首次接入、观察和控制 | [使用手册](docs/OPERATIONS.md) |
+| Docker、systemd、升级和回滚 | [部署](docs/DEPLOYMENT.md) |
+| 告警、去重和投递回执 | [消息中心](docs/NOTIFICATIONS.md) |
+| 数据边界和请求流向 | [架构](docs/ARCHITECTURE.md) |
+| 已知限制和证据口径 | [整仓审查](docs/REVIEW.md) |
 
 ## 发布
 
