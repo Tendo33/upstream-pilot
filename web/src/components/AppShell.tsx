@@ -1,6 +1,7 @@
 import {
   Activity,
   BellRing,
+  CreditCard,
   Database,
   ExternalLink,
   Github,
@@ -9,6 +10,8 @@ import {
   LogOut,
   Moon,
   Server,
+  ShieldAlert,
+  Ticket,
   Sun,
   UsersRound,
 } from "lucide-react";
@@ -35,6 +38,9 @@ const commonLinks = [
   { to: "/groups", label: "分组", icon: Layers3 },
   { to: "/notifications", label: "消息", icon: BellRing },
   { to: "/events", label: "活动日志", icon: Activity },
+  { to: "/billing", label: "充值审计", icon: CreditCard },
+  { to: "/redemptions", label: "兑换码", icon: Ticket },
+  { to: "/risk", label: "运营风控", icon: ShieldAlert },
 ];
 
 type DockItem = `nav:${string}` | "github" | "theme" | "account";
