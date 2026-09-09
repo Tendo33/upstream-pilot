@@ -15,6 +15,7 @@ import {
   Ticket,
   Sun,
   UsersRound,
+  Zap,
 } from "lucide-react";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -43,6 +44,8 @@ const commonLinks = [
   { to: "/billing", label: "充值审计", icon: CreditCard },
   { to: "/redemptions", label: "兑换码", icon: Ticket },
   { to: "/risk", label: "运营风控", icon: ShieldAlert },
+  { to: "/operations", label: "运行状态", icon: Activity },
+  { to: "/service-checks", label: "服务探测", icon: Zap },
 ];
 
 type DockItem = `nav:${string}` | "github" | "theme" | "account";
