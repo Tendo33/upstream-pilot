@@ -114,6 +114,9 @@ export function OverviewPage() {
   const healthPercent = healthTotal ? (overview.healthy / healthTotal) * 100 : 0;
   const failingPercent = healthTotal ? (overview.failing / healthTotal) * 100 : 0;
   const connected = sites.filter((site) => site.connection_state === "healthy").length;
+  const synced = sites.filter((site) => site.last_inventory_at).length;
+  const evidence = objectives.filter((item) => item.samples > 0 && item.status !== "unknown").length;
+  const integrationState = !sites.length ? "未接入" : !connected ? "已添加但连接未确认" : !synced ? "已连接未同步" : !evidence ? "已同步，暂无有效质量样本" : "已具备质量证据";
 
   return (
     <div className="page">
@@ -133,6 +136,17 @@ export function OverviewPage() {
         <Metric label="账号" value={overview.accounts} note={`${overview.automated} 个已启用自动化`} icon={<Database size={18} />} />
         <Metric label="最近探测成功" value={overview.healthy} note={`${overview.failing} 个探测异常`} icon={<CheckCircle2 size={18} />} tone={overview.failing ? "warning" : "success"} />
         <Metric label="近 24 小时失败" value={overview.recent_failures} note={`${overview.paused} 个历史暂停状态`} icon={<ShieldAlert size={18} />} tone={overview.recent_failures ? "danger" : "neutral"} />
+      </section>
+
+      <section className="panel overview-status-panel" aria-label="接入状态">
+        <div className="panel-heading"><div><h2>接入与可用性</h2><p>把连接、同步、质量证据和真实请求分开判断</p></div><Badge tone={evidence ? "success" : connected ? "warning" : "neutral"}>{integrationState}</Badge></div>
+        <div className="status-step-grid">
+          <div><strong>连接</strong><span>{connected} / {sites.length} 个站点已确认</span></div>
+          <div><strong>库存</strong><span>{synced ? "已同步" : "等待首次同步"}</span></div>
+          <div><strong>质量证据</strong><span>{evidence ? `${evidence} 个档案有有效样本` : "尚未验证"}</span></div>
+          <div><strong>真实可用性</strong><span>请求、流式、工具和实际路由需单独验证</span></div>
+        </div>
+        {sites.length > 0 && <div className="panel-actions"><Link className="button button-secondary button-sm" to="/sites">{synced ? "查看站点" : "开始同步"} <ArrowUpRight size={14} /></Link><Link className="button button-secondary button-sm" to="/service-checks">创建服务探测档案 <ArrowUpRight size={14} /></Link></div>}
       </section>
 
       {overview.sites === 0 ? (
