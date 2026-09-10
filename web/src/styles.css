@@ -74,6 +74,20 @@ label.quality-checkboxes,.quality-checkboxes label { display:flex; align-items:f
 .quality-history-line { display:grid; grid-template-columns:180px 100px 1fr; gap:16px; padding:12px 0; border-bottom:1px solid var(--border); font-size:12px; }
 .quality-pagination { display:flex; justify-content:center; gap:20px; align-items:center; margin-top:20px; }
 .quality-notification { padding:18px 0; border-bottom:1px solid var(--border); }
+.risk-ranking-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; margin-top:20px; }
+.risk-ranking-list { list-style:none; padding:0; margin:0; }
+.risk-ranking-list li { display:grid; grid-template-columns:32px 1fr auto; gap:12px; align-items:center; padding:15px 4px; border-bottom:1px solid var(--border); }
+.risk-ranking-list li:last-child { border-bottom:0; }
+.risk-rank { width:26px; height:26px; display:grid; place-items:center; border-radius:7px; background:var(--subtle); color:var(--muted); font-weight:700; }
+.risk-user { min-width:0; display:flex; flex-direction:column; gap:4px; }
+.risk-user strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.risk-user small,.risk-value small { color:var(--muted); font-size:11px; }
+.risk-value { text-align:right; display:flex; flex-direction:column; gap:4px; align-items:flex-end; }
+.risk-value strong { font-variant-numeric:tabular-nums; }
+.detail-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; padding:20px 0; }
+.detail-grid span { display:flex; flex-direction:column; gap:6px; color:var(--muted); font-size:12px; }
+.detail-grid strong { color:var(--text); font-size:14px; }
+@media (max-width: 1050px) { .risk-ranking-grid { grid-template-columns:1fr; } }
 .quality-notification>div { display:flex; flex-wrap:wrap; gap:12px; align-items:center; font-size:12px; color:var(--muted); }
 .quality-notification p { margin:12px 0 6px; overflow-wrap:anywhere; }
 .quality-notification small { color:var(--danger); }

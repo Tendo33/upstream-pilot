@@ -47,6 +47,8 @@ openssl rand -base64 32
 
 编辑 `.env`，填入独立数据库的 `PILOT_DATABASE_URL`，将生成的密钥填入 `PILOT_MASTER_KEY`，然后：
 
+服务用户、用量排行、IP 风控、充值审计、兑换码和库存同步使用数据库作为数据源。启用这些能力时，在 `PILOT_SUB2API_DATABASE_URL` 填写 Sub2API PostgreSQL 的只读连接。Pilot 只设置只读会话、不会执行 Sub2API 迁移；探测、写回和业务控制仍通过 Sub2API 管理接口完成。库存同步读取 `accounts`、`groups`、`account_groups`，不读取凭据密文。流量和成本采集尚未迁移，当前仍依赖管理 API。
+
 ```bash
 make build
 ./scripts/run-local.sh .env

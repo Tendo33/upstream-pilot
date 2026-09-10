@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -22,8 +21,6 @@ const (
 	listTotalDirect           = -2
 	maxObservedSourceURLBytes = 2048
 	accountExportBatchSize    = 100
-	accountExportConcurrency  = 4
-	accountExportTimeout      = 10 * time.Second
 )
 
 type Sub2Client struct {
@@ -206,141 +203,6 @@ type AccountUsageStats struct {
 	TotalCacheReadTokens     int64 `json:"total_cache_read_tokens"`
 }
 
-// PaymentOrder is the stable, non-sensitive subset exposed by Sub2API's
-// administrator payment endpoint. Unknown fields are intentionally ignored so
-// newer upstream versions can be consumed without leaking provider payloads.
-type PaymentOrder struct {
-	ID               int64      `json:"id"`
-	UserID           int64      `json:"user_id"`
-	Status           string     `json:"status"`
-	OrderType        string     `json:"order_type"`
-	PaymentType      string     `json:"payment_type"`
-	Amount           float64    `json:"amount"`
-	Currency         string     `json:"currency"`
-	CreatedAt        *time.Time `json:"created_at"`
-	PaidAt           *time.Time `json:"paid_at"`
-	CompletedAt      *time.Time `json:"completed_at"`
-	NormalizedStatus string     `json:"normalized_status,omitempty"`
-}
-
-type PaymentOrderPage struct {
-	Items []PaymentOrder `json:"items"`
-	Total int            `json:"total"`
-}
-
-type PaymentOrderSummary struct {
-	CountByStatus  map[string]int     `json:"count_by_status"`
-	AmountByStatus map[string]float64 `json:"amount_by_status"`
-}
-
-type RedeemCode struct {
-	ID        int64      `json:"id"`
-	Code      string     `json:"code"`
-	Type      string     `json:"type"`
-	Status    string     `json:"status"`
-	Value     float64    `json:"value"`
-	UsedBy    *int64     `json:"used_by"`
-	ExpiresAt *time.Time `json:"expires_at"`
-	CreatedAt *time.Time `json:"created_at"`
-}
-
-type RedeemCodePage struct {
-	Items []RedeemCode `json:"items"`
-	Total int          `json:"total"`
-}
-
-func (c *Sub2Client) ListRedeemCodes(ctx context.Context, page, pageSize int) (RedeemCodePage, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 100
-	}
-	query := url.Values{"page": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(pageSize)}}
-	raw, err := c.request(ctx, http.MethodGet, "/redeem-codes?"+query.Encode(), nil, "application/json")
-	if err != nil {
-		return RedeemCodePage{}, err
-	}
-	var direct RedeemCodePage
-	if json.Unmarshal(raw, &direct) == nil && direct.Items != nil {
-		return direct, nil
-	}
-	var envelope struct {
-		Data RedeemCodePage `json:"data"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return RedeemCodePage{}, fmt.Errorf("decode redeem codes: %w", err)
-	}
-	return envelope.Data, nil
-}
-
-func SummarizePaymentOrders(items []PaymentOrder) PaymentOrderSummary {
-	s := PaymentOrderSummary{CountByStatus: map[string]int{}, AmountByStatus: map[string]float64{}}
-	for _, item := range items {
-		status := item.NormalizedStatus
-		if status == "" {
-			status = NormalizePaymentStatus(item.Status)
-		}
-		s.CountByStatus[status]++
-		s.AmountByStatus[status] += item.Amount
-	}
-	return s
-}
-
-func (c *Sub2Client) ListPaymentOrders(ctx context.Context, page, pageSize int) (PaymentOrderPage, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 100
-	}
-	query := url.Values{"page": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(pageSize)}}
-	raw, err := c.request(ctx, http.MethodGet, "/payment/orders?"+query.Encode(), nil, "application/json")
-	if err != nil {
-		return PaymentOrderPage{}, err
-	}
-	var pageResult PaymentOrderPage
-	if err := json.Unmarshal(raw, &pageResult); err == nil && pageResult.Items != nil {
-		normalizePaymentOrders(pageResult.Items)
-		return pageResult, nil
-	}
-	var envelope struct {
-		Data PaymentOrderPage `json:"data"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return PaymentOrderPage{}, fmt.Errorf("decode payment orders: %w", err)
-	}
-	normalizePaymentOrders(envelope.Data.Items)
-	return envelope.Data, nil
-}
-
-func normalizePaymentOrders(items []PaymentOrder) {
-	for i := range items {
-		items[i].NormalizedStatus = NormalizePaymentStatus(items[i].Status)
-	}
-}
-
-func NormalizePaymentStatus(status string) string {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "pending":
-		return "pending"
-	case "paid":
-		return "paid"
-	case "recharging", "recharge", "processing":
-		return "recharging"
-	case "completed", "complete", "success":
-		return "completed"
-	case "expired", "timeout":
-		return "expired"
-	case "failed", "failure":
-		return "failed"
-	case "cancelled", "canceled":
-		return "cancelled"
-	default:
-		return "unknown"
-	}
-}
-
 func NewSub2Client(rawURL, apiKey string, client *http.Client) (*Sub2Client, error) {
 	baseURL, err := NormalizeBaseURL(rawURL)
 	if err != nil {
@@ -507,12 +369,12 @@ func (c *Sub2Client) ListGroups(ctx context.Context) ([]Sub2Group, error) {
 }
 
 func (c *Sub2Client) ListAccounts(ctx context.Context) ([]Sub2Account, error) {
-	return c.listAccounts(ctx, true)
+	return c.listAccounts(ctx)
 }
 func (c *Sub2Client) ListAccountRuntime(ctx context.Context) ([]Sub2Account, error) {
-	return c.listAccounts(ctx, false)
+	return c.listAccounts(ctx)
 }
-func (c *Sub2Client) listAccounts(ctx context.Context, hydrate bool) ([]Sub2Account, error) {
+func (c *Sub2Client) listAccounts(ctx context.Context) ([]Sub2Account, error) {
 	const pageSize = 200
 	all := make([]Sub2Account, 0, pageSize)
 	seen := make(map[int64]struct{})
@@ -540,124 +402,22 @@ func (c *Sub2Client) listAccounts(ctx context.Context, hydrate bool) ([]Sub2Acco
 		}
 		all = append(all, items...)
 		if total == listTotalDirect {
-			if hydrate {
-				return c.fillMissingAccountSourceURLs(ctx, all), nil
-			}
 			return all, nil
 		}
 		if total >= 0 && len(all) >= total {
-			if hydrate {
-				return c.fillMissingAccountSourceURLs(ctx, all), nil
-			}
 			return all, nil
 		}
 		if len(items) == 0 {
 			if total > len(all) {
 				return nil, fmt.Errorf("Sub2API account pagination stalled after %d of %d accounts", len(all), total)
 			}
-			if hydrate {
-				return c.fillMissingAccountSourceURLs(ctx, all), nil
-			}
 			return all, nil
 		}
 		if total == listTotalUnknown && len(items) < pageSize {
-			if hydrate {
-				return c.fillMissingAccountSourceURLs(ctx, all), nil
-			}
 			return all, nil
 		}
 	}
 	return nil, errors.New("Sub2API account pagination exceeded 10000 pages")
-}
-
-func (c *Sub2Client) fillMissingAccountSourceURLs(ctx context.Context, accounts []Sub2Account) []Sub2Account {
-	indexes := make(map[int64]int, len(accounts))
-	missing := make([]int64, 0)
-	for index := range accounts {
-		indexes[accounts[index].ID] = index
-		if !accounts[index].SourceCredentialsPresent || !accounts[index].ObservedSourceCredentialFingerprintKnown {
-			missing = append(missing, accounts[index].ID)
-		}
-	}
-	if len(missing) == 0 {
-		return accounts
-	}
-	apply := func(observations map[int64]sourceURLObservation) {
-		for accountID, observation := range observations {
-			index, ok := indexes[accountID]
-			if !ok {
-				continue
-			}
-			if observation.URLKnown {
-				accounts[index].SourceCredentialsPresent = true
-				accounts[index].ObservedSourceBaseURLKnown = true
-				accounts[index].ObservedSourceBaseURL = observation.URL
-			}
-			if observation.CredentialFingerprintKnown {
-				accounts[index].SourceCredentialsPresent = true
-				accounts[index].ObservedSourceCredentialFingerprintKnown = true
-				accounts[index].ObservedSourceCredentialFingerprint = observation.CredentialFingerprint
-			}
-		}
-	}
-	exportBatch := func(batch []int64) (map[int64]sourceURLObservation, error) {
-		batchCtx, cancel := context.WithTimeout(ctx, accountExportTimeout)
-		defer cancel()
-		return c.exportAccountSourceURLs(batchCtx, batch)
-	}
-
-	firstEnd := min(accountExportBatchSize, len(missing))
-	first, err := exportBatch(missing[:firstEnd])
-	if err == nil {
-		apply(first)
-	} else if accountExportUnavailable(err) {
-		return accounts
-	}
-	if firstEnd == len(missing) || ctx.Err() != nil {
-		return accounts
-	}
-
-	type exportBatchRange struct{ start, end int }
-	batchCount := (len(missing) - firstEnd + accountExportBatchSize - 1) / accountExportBatchSize
-	jobs := make(chan exportBatchRange, batchCount)
-	results := make(chan map[int64]sourceURLObservation, batchCount)
-	for start := firstEnd; start < len(missing); start += accountExportBatchSize {
-		jobs <- exportBatchRange{start: start, end: min(start+accountExportBatchSize, len(missing))}
-	}
-	close(jobs)
-
-	workerCount := min(accountExportConcurrency, batchCount)
-	var workers sync.WaitGroup
-	workers.Add(workerCount)
-	for range workerCount {
-		go func() {
-			defer workers.Done()
-			for batch := range jobs {
-				observations, batchErr := exportBatch(missing[batch.start:batch.end])
-				if batchErr == nil {
-					results <- observations
-				}
-			}
-		}()
-	}
-	workers.Wait()
-	close(results)
-	for observations := range results {
-		apply(observations)
-	}
-	return accounts
-}
-
-func accountExportUnavailable(err error) bool {
-	var httpErr *HTTPError
-	return errors.As(err, &httpErr) && (httpErr.Status == http.StatusNotFound || httpErr.Status == http.StatusMethodNotAllowed || httpErr.Status == http.StatusGone || httpErr.Status == http.StatusNotImplemented)
-}
-
-type sourceURLObservation struct {
-	URLKnown                   bool
-	URL                        *string
-	CredentialFingerprintKnown bool
-	CredentialFingerprint      string
 }
 
 type exportedAccountObservation struct {
@@ -702,88 +462,6 @@ func decodePositiveInt64(raw json.RawMessage) (int64, bool) {
 	}
 	value, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
 	return value, err == nil && value > 0
-}
-
-func (c *Sub2Client) exportAccountSourceURLs(ctx context.Context, accountIDs []int64) (map[int64]sourceURLObservation, error) {
-	if len(accountIDs) == 0 {
-		return map[int64]sourceURLObservation{}, nil
-	}
-	requested := make(map[int64]struct{}, len(accountIDs))
-	ids := make([]string, 0, len(accountIDs))
-	for _, accountID := range accountIDs {
-		if accountID <= 0 {
-			continue
-		}
-		if _, duplicate := requested[accountID]; duplicate {
-			continue
-		}
-		requested[accountID] = struct{}{}
-		ids = append(ids, strconv.FormatInt(accountID, 10))
-	}
-	if len(ids) == 0 {
-		return map[int64]sourceURLObservation{}, nil
-	}
-	query := url.Values{"ids": {strings.Join(ids, ",")}, "include_proxies": {"false"}}
-	raw, err := c.request(ctx, http.MethodGet, "/accounts/data?"+query.Encode(), nil, "application/json")
-	if err != nil {
-		return nil, err
-	}
-	items, err := decodeExportedAccountObservations(raw)
-	if err != nil {
-		return nil, err
-	}
-	if len(requested) == 1 && len(items) == 1 && items[0].ID == 0 {
-		for accountID := range requested {
-			items[0].ID = accountID
-		}
-	}
-	result := make(map[int64]sourceURLObservation, len(items))
-	for _, item := range items {
-		if _, ok := requested[item.ID]; !ok || item.Credentials == nil {
-			continue
-		}
-		urlKnown, observedURL := observeSourceBaseURL(item.Credentials)
-		fingerprintKnown, fingerprint := observeSourceCredentialFingerprint(item.Credentials)
-		if urlKnown || fingerprintKnown {
-			result[item.ID] = sourceURLObservation{
-				URLKnown: urlKnown, URL: observedURL,
-				CredentialFingerprintKnown: fingerprintKnown, CredentialFingerprint: fingerprint,
-			}
-		}
-	}
-	if len(requested) > 1 && len(result) < len(requested) {
-		missing := make(chan int64, len(requested)-len(result))
-		for accountID := range requested {
-			if _, ok := result[accountID]; !ok {
-				missing <- accountID
-			}
-		}
-		close(missing)
-
-		singles := make(chan map[int64]sourceURLObservation, cap(missing))
-		var workers sync.WaitGroup
-		workerCount := min(accountExportConcurrency, cap(missing))
-		workers.Add(workerCount)
-		for range workerCount {
-			go func() {
-				defer workers.Done()
-				for accountID := range missing {
-					observation, singleErr := c.exportAccountSourceURLs(ctx, []int64{accountID})
-					if singleErr == nil {
-						singles <- observation
-					}
-				}
-			}()
-		}
-		workers.Wait()
-		close(singles)
-		for observations := range singles {
-			for accountID, observation := range observations {
-				result[accountID] = observation
-			}
-		}
-	}
-	return result, nil
 }
 
 func decodeExportedAccountObservations(raw []byte) ([]exportedAccountObservation, error) {

@@ -282,6 +282,10 @@ func (a *App) syncSiteHandler(w http.ResponseWriter, r *http.Request) error {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
+		var apiErr *apiError
+		if errors.As(err, &apiErr) {
+			return apiErr
+		}
 		return &apiError{Status: http.StatusUnprocessableEntity, Code: "SYNC_FAILED", Message: err.Error()}
 	}
 	site, err := a.getSite(r.Context(), siteID, identity.ID)

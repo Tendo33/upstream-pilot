@@ -105,7 +105,11 @@ export function SitesPage() {
         return editor.site ? current.map((item) => item.id === saved.id ? saved : item) : [...current, saved];
       });
       setEditor(null);
-      toast(editor.site ? "站点设置已保存" : "站点已添加，库存同步已开始", "success");
+      if (!editor.site && saved.last_error) {
+        toast(`站点已添加，但库存同步失败：${saved.last_error}`, "error");
+      } else {
+        toast(editor.site ? "站点设置已保存" : "站点已添加，库存同步已开始", "success");
+      }
     } catch (cause) {
       toast(errorMessage(cause), "error");
     } finally {

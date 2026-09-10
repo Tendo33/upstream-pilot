@@ -20,6 +20,8 @@ import { GroupsPage } from "./pages/GroupsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SitesPage } from "./pages/SitesPage";
 import { UsersPage } from "./pages/UsersPage";
+import { ServiceUsersPage } from "./pages/ServiceUsersPage";
+import { ServiceUserDetailPage } from "./pages/ServiceUserDetailPage";
 import type { SetupStatus, User } from "./types";
 
 type BootState =
@@ -120,7 +122,9 @@ function AuthenticatedApp({ user, dark, setDark, onSessionEnded }: { user: User;
         <Route path="/groups" element={<GroupsPage />} />
         <Route path="/events" element={<EventsPage />} />
         <Route path="/alerts" element={<Navigate to="/notifications" replace />} />
-        <Route path="/users" element={user.role === "admin" ? <UsersPage currentUser={user} /> : <Navigate to="/" replace />} />
+        <Route path="/users" element={user.role === "admin" ? <ServiceUsersPage /> : <Navigate to="/" replace />} />
+        <Route path="/users/:userID" element={user.role === "admin" ? <ServiceUserDetailPage /> : <Navigate to="/" replace />} />
+        <Route path="/settings/admin-users" element={user.role === "admin" ? <UsersPage currentUser={user} /> : <Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AppShell>

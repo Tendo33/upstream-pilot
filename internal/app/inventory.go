@@ -28,19 +28,9 @@ func (a *App) syncSiteLocked(ctx context.Context, siteID, ownerFilter, actorID, 
 	if err != nil {
 		return err
 	}
-	client, err := a.sub2Client(site)
-	if err != nil {
-		return err
-	}
 	requestCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	groups, err := client.ListGroups(requestCtx)
-	if err != nil {
-		a.recordSiteFailure(ctx, siteID, err)
-		_ = a.audit(ctx, site.OwnerID, actorID, siteID, "", "inventory.sync", "failed", map[string]any{"error": err.Error(), "mode": mode})
-		return fmt.Errorf("库存同步失败：%w", err)
-	}
-	accounts, err := client.ListAccounts(requestCtx)
+	groups, accounts, err := a.loadSourceInventory(requestCtx)
 	if err != nil {
 		a.recordSiteFailure(ctx, siteID, err)
 		_ = a.audit(ctx, site.OwnerID, actorID, siteID, "", "inventory.sync", "failed", map[string]any{"error": err.Error(), "mode": mode})
@@ -145,15 +135,14 @@ func (a *App) syncSiteLocked(ctx context.Context, siteID, ownerFilter, actorID, 
 	if err != nil {
 		return err
 	}
-	version := client.Version(requestCtx)
-	capabilities, err := json.Marshal(upstream.InventoryCapabilities(version, accounts))
+	capabilities, err := json.Marshal(upstream.InventoryCapabilities("source-db", accounts))
 	if err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE sites SET capabilities=$2 WHERE id=$1`, siteID, capabilities); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE sites SET connection_state='healthy',last_error=NULL,version_hint=COALESCE(NULLIF($2,''),version_hint),last_inventory_at=now(),next_inventory_at=now()+inventory_interval_seconds*interval '1 second',inventory_lease_until=NULL,updated_at=now() WHERE id=$1`, siteID, version)
+	_, err = tx.Exec(ctx, `UPDATE sites SET connection_state='healthy',last_error=NULL,last_inventory_at=now(),next_inventory_at=now()+inventory_interval_seconds*interval '1 second',inventory_lease_until=NULL,updated_at=now() WHERE id=$1`, siteID)
 	if err != nil {
 		return err
 	}

@@ -56,6 +56,24 @@ func main() {
 		logger.Info("database and audit log migrations applied")
 		return
 	}
+	if cfg.Sub2DatabaseURL != "" {
+		sourcePool, err := database.OpenSource(ctx, cfg.Sub2DatabaseURL)
+		if err != nil {
+			logger.Error("Sub2API database reader failed", slog.Any("error", err))
+			os.Exit(1)
+		}
+		defer sourcePool.Close()
+		application.SetSourceDatabase(sourcePool)
+		if cfg.Sub2LogDatabaseURL != "" && cfg.Sub2LogDatabaseURL != cfg.Sub2DatabaseURL {
+			logPool, err := database.OpenSource(ctx, cfg.Sub2LogDatabaseURL)
+			if err != nil {
+				logger.Error("Sub2API log database reader failed", slog.Any("error", err))
+				os.Exit(1)
+			}
+			defer logPool.Close()
+			application.SetSourceLogDatabase(logPool)
+		}
+	}
 	scheduler := application.NewScheduler()
 	go scheduler.Run(ctx)
 

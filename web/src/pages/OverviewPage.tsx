@@ -22,6 +22,7 @@ interface OverviewData {
   sites: Site[];
   objectives: ServiceObjective[];
 }
+interface SourceOverview { total_users:number; total_tokens:number; requests_24h:number; active_users_24h:number; active_tokens_24h:number; active_ips_24h:number; cost_24h:number; }
 
 interface ServiceObjective {
   profile_id: string;
@@ -74,6 +75,8 @@ export function OverviewPage() {
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [eventsLoading, setEventsLoading] = useState(true);
+  const [sourceOverview, setSourceOverview] = useState<SourceOverview | null>(null);
+  const [sourceMessage, setSourceMessage] = useState("");
   const { toast } = useToast();
 
   const load = useCallback(async (quiet = false) => {
@@ -86,6 +89,7 @@ export function OverviewPage() {
         api<Site[]>("/sites"),
         api<ServiceObjective[]>("/service-objectives").catch(() => []),
       ]);
+      void api<SourceOverview>("/source/overview").then(value => { setSourceOverview(value); setSourceMessage(""); }).catch(error => { setSourceOverview(null); setSourceMessage(errorMessage(error)); });
       setData((current) => current && quiet ? { ...current, overview, sites, objectives } : { overview, events: [], sites, objectives });
       setEventsLoading(true);
       try {
@@ -137,6 +141,8 @@ export function OverviewPage() {
         <Metric label="最近探测成功" value={overview.healthy} note={`${overview.failing} 个探测异常`} icon={<CheckCircle2 size={18} />} tone={overview.failing ? "warning" : "success"} />
         <Metric label="近 24 小时失败" value={overview.recent_failures} note={`${overview.paused} 个历史暂停状态`} icon={<ShieldAlert size={18} />} tone={overview.recent_failures ? "danger" : "neutral"} />
       </section>
+      {sourceOverview && <section className="panel source-overview-panel"><div className="panel-heading"><div><h2>服务规模</h2><p>读取已配置的 Sub2API 只读库和用量日志</p></div><Link className="text-link" to="/users">查看服务用户 <ArrowUpRight size={14} /></Link></div><div className="status-step-grid"><div><strong>服务用户</strong><span>{sourceOverview.total_users.toLocaleString()}</span></div><div><strong>API Token</strong><span>{sourceOverview.total_tokens.toLocaleString()}</span></div><div><strong>24 小时请求</strong><span>{sourceOverview.requests_24h.toLocaleString()}</span></div><div><strong>活跃用户</strong><span>{sourceOverview.active_users_24h.toLocaleString()}</span></div><div><strong>活跃 IP</strong><span>{sourceOverview.active_ips_24h.toLocaleString()}</span></div><div><strong>24 小时消费</strong><span>{Number(sourceOverview.cost_24h || 0).toFixed(4)}</span></div></div></section>}
+      {!sourceOverview && sourceMessage && <section className="panel source-overview-panel"><div className="panel-heading"><div><h2>服务规模</h2><p>{sourceMessage}</p></div><Link className="text-link" to="/sites">检查连接设置 <ArrowUpRight size={14} /></Link></div></section>}
 
       <section className="panel overview-status-panel" aria-label="接入状态">
         <div className="panel-heading"><div><h2>接入与可用性</h2><p>把连接、同步、质量证据和真实请求分开判断</p></div><Badge tone={evidence ? "success" : connected ? "warning" : "neutral"}>{integrationState}</Badge></div>

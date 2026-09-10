@@ -16,6 +16,8 @@ import (
 type App struct {
 	config               config.Config
 	db                   *pgxpool.Pool
+	sourceDB             *pgxpool.Pool
+	sourceLogDB          *pgxpool.Pool
 	cipher               *secret.Cipher
 	httpClient           *http.Client
 	versions             *versionChecker
@@ -58,3 +60,7 @@ func New(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error)
 func (a *App) Ready(ctx context.Context) error {
 	return a.db.Ping(ctx)
 }
+
+// SetSourceDatabase attaches the independently managed, read-only Sub2API pool.
+func (a *App) SetSourceDatabase(pool *pgxpool.Pool)    { a.sourceDB = pool }
+func (a *App) SetSourceLogDatabase(pool *pgxpool.Pool) { a.sourceLogDB = pool }

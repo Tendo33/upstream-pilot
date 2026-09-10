@@ -42,6 +42,7 @@ const navigationGroups = [
   ] },
   { id: "business", label: "运营管理", links: [
     { to: "/overview", label: "总览", description: "站点运营概况", icon: LayoutDashboard },
+    { to: "/users", label: "服务用户", description: "用户、状态与活动", icon: UsersRound },
     { to: "/billing", label: "充值审计", description: "核对充值记录", icon: CreditCard },
     { to: "/redemptions", label: "兑换码", description: "查看使用状态与额度", icon: Ticket },
     { to: "/risk", label: "运营风控", description: "检查运营风险", icon: ShieldAlert },
@@ -179,8 +180,8 @@ export function AppShell({ user, dark, onToggleTheme, onLogout, children }: AppS
                       <small>{roleLabel}</small>
                     </span>
                   </div>
-                  {user.role === "admin" && <Link className="nav-account-users" to="/users" onClick={() => setAccountOpen(false)}>
-                    <UsersRound size={16} aria-hidden="true" /><span>用户管理</span>
+                  {user.role === "admin" && <Link className="nav-account-users" to="/settings/admin-users" onClick={() => setAccountOpen(false)}>
+                    <UsersRound size={16} aria-hidden="true" /><span>控制台用户</span>
                   </Link>}
                   {versionStatus && (
                     <a

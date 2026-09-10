@@ -14,39 +14,33 @@ import (
 )
 
 type Config struct {
-	DatabaseURL                 string
-	LogDir                      string
-	ListenAddr                  string
-	PublicURL                   string
-	MasterKey                   []byte
-	CookieSecure                bool
-	AutoMigrate                 bool
-	Workers                     int
-	AllowPrivateUpstreams       bool
-	OperationsExtensionsEnabled bool
-	BillingAuditEnabled         bool
-	RedemptionEnabled           bool
-	RiskAnalysisEnabled         bool
-	AbuseHubEnabled             bool
-	SessionTTL                  time.Duration
+	DatabaseURL           string
+	Sub2DatabaseURL       string
+	Sub2LogDatabaseURL    string
+	LogDir                string
+	ListenAddr            string
+	PublicURL             string
+	MasterKey             []byte
+	CookieSecure          bool
+	AutoMigrate           bool
+	Workers               int
+	AllowPrivateUpstreams bool
+	SessionTTL            time.Duration
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		DatabaseURL:                 strings.TrimSpace(os.Getenv("PILOT_DATABASE_URL")),
-		LogDir:                      env("PILOT_LOG_DIR", "./logs"),
-		ListenAddr:                  env("PILOT_LISTEN_ADDR", "127.0.0.1:33777"),
-		PublicURL:                   strings.TrimRight(env("PILOT_PUBLIC_URL", "http://127.0.0.1:33777"), "/"),
-		CookieSecure:                envBool("PILOT_COOKIE_SECURE", false),
-		AutoMigrate:                 envBool("PILOT_AUTO_MIGRATE", true),
-		Workers:                     envInt("PILOT_WORKERS", 8),
-		AllowPrivateUpstreams:       envBool("PILOT_ALLOW_PRIVATE_UPSTREAMS", false),
-		OperationsExtensionsEnabled: envBool("PILOT_OPERATIONS_EXTENSIONS_ENABLED", true),
-		BillingAuditEnabled:         envBool("PILOT_BILLING_AUDIT_ENABLED", true),
-		RedemptionEnabled:           envBool("PILOT_REDEMPTION_ENABLED", false),
-		RiskAnalysisEnabled:         envBool("PILOT_RISK_ANALYSIS_ENABLED", true),
-		AbuseHubEnabled:             envBool("PILOT_ABUSEHUB_ENABLED", false),
-		SessionTTL:                  30 * 24 * time.Hour,
+		DatabaseURL:           strings.TrimSpace(os.Getenv("PILOT_DATABASE_URL")),
+		Sub2DatabaseURL:       strings.TrimSpace(os.Getenv("PILOT_SUB2API_DATABASE_URL")),
+		Sub2LogDatabaseURL:    strings.TrimSpace(os.Getenv("PILOT_SUB2API_LOG_DATABASE_URL")),
+		LogDir:                env("PILOT_LOG_DIR", "./logs"),
+		ListenAddr:            env("PILOT_LISTEN_ADDR", "127.0.0.1:33777"),
+		PublicURL:             strings.TrimRight(env("PILOT_PUBLIC_URL", "http://127.0.0.1:33777"), "/"),
+		CookieSecure:          envBool("PILOT_COOKIE_SECURE", false),
+		AutoMigrate:           envBool("PILOT_AUTO_MIGRATE", true),
+		Workers:               envInt("PILOT_WORKERS", 8),
+		AllowPrivateUpstreams: envBool("PILOT_ALLOW_PRIVATE_UPSTREAMS", false),
+		SessionTTL:            30 * 24 * time.Hour,
 	}
 	if cfg.DatabaseURL == "" {
 		return Config{}, errors.New("PILOT_DATABASE_URL is required")

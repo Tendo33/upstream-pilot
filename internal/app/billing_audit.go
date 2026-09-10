@@ -1,32 +1,57 @@
 package app
 
 import (
-	"github.com/Tendo33/upstream-pilot/internal/upstream"
-	"net/http"
-	"strconv"
+	"strings"
+	"time"
 )
 
-type billingAuditPage struct {
-	SiteID   string `json:"site_id"`
-	SiteName string `json:"site_name"`
-	Items    any    `json:"items"`
-	Total    int    `json:"total"`
+// Commerce response models belong to the database read path, not Sub2API's HTTP client.
+type PaymentOrder struct {
+	ID               int64      `json:"id"`
+	UserID           int64      `json:"user_id"`
+	NormalizedStatus string     `json:"normalized_status"`
+	Amount           float64    `json:"amount"`
+	Currency         *string    `json:"currency"`
+	CreatedAt        *time.Time `json:"created_at"`
+	CompletedAt      *time.Time `json:"completed_at"`
+}
+type PaymentOrderSummary struct {
+	CountByStatus  map[string]int64   `json:"count_by_status"`
+	AmountByStatus map[string]float64 `json:"amount_by_status"`
+}
+type sourceBillingResponse struct {
+	Items    []PaymentOrder      `json:"items"`
+	Total    int64               `json:"total"`
+	Page     int                 `json:"page"`
+	PageSize int                 `json:"page_size"`
+	Summary  PaymentOrderSummary `json:"summary"`
 }
 
-type billingAuditResponse struct {
-	billingAuditPage
-	Summary upstream.PaymentOrderSummary `json:"summary"`
+func normalizeBillingResponse(v *sourceBillingResponse) {
+	for i := range v.Items {
+		v.Items[i].NormalizedStatus = NormalizePaymentStatus(v.Items[i].NormalizedStatus)
+	}
+	counts := map[string]int64{}
+	amounts := map[string]float64{}
+	for k, n := range v.Summary.CountByStatus {
+		counts[NormalizePaymentStatus(k)] += n
+	}
+	for k, n := range v.Summary.AmountByStatus {
+		amounts[NormalizePaymentStatus(k)] += n
+	}
+	v.Summary.CountByStatus = counts
+	v.Summary.AmountByStatus = amounts
 }
 
 type redeemCodeView struct {
-	ID        int64   `json:"id"`
-	Code      string  `json:"code"`
-	Type      string  `json:"type"`
-	Status    string  `json:"status"`
-	Value     float64 `json:"value"`
-	UsedBy    *int64  `json:"used_by"`
-	ExpiresAt any     `json:"expires_at"`
-	CreatedAt any     `json:"created_at"`
+	ID        int64      `json:"id"`
+	Code      string     `json:"code"`
+	Type      string     `json:"type"`
+	Status    string     `json:"status"`
+	Value     float64    `json:"value"`
+	UsedBy    *int64     `json:"used_by"`
+	ExpiresAt *time.Time `json:"expires_at"`
+	CreatedAt *time.Time `json:"created_at"`
 }
 
 func maskRedeemCode(code string) string {
@@ -36,59 +61,23 @@ func maskRedeemCode(code string) string {
 	return code[:3] + "******" + code[len(code)-3:]
 }
 
-func (a *App) redeemCodesHandler(w http.ResponseWriter, r *http.Request) error {
-	if !a.config.OperationsExtensionsEnabled {
-		return &apiError{Status: http.StatusNotFound, Code: "EXTENSIONS_DISABLED", Message: "运营扩展未启用"}
+func NormalizePaymentStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "pending":
+		return "pending"
+	case "paid":
+		return "paid"
+	case "recharging", "recharge", "processing":
+		return "recharging"
+	case "completed", "complete", "success":
+		return "completed"
+	case "expired", "timeout":
+		return "expired"
+	case "failed", "failure":
+		return "failed"
+	case "cancelled", "canceled":
+		return "cancelled"
+	default:
+		return "unknown"
 	}
-	identity := identityFrom(r)
-	siteID := r.URL.Query().Get("site_id")
-	if siteID == "" {
-		return &apiError{Status: http.StatusBadRequest, Code: "SITE_REQUIRED", Message: "请选择一个 Sub2API 站点"}
-	}
-	site, err := a.siteSecret(r.Context(), siteID, identity.ID)
-	if err != nil {
-		return err
-	}
-	client, err := a.sub2Client(site)
-	if err != nil {
-		return err
-	}
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
-	codes, err := client.ListRedeemCodes(r.Context(), page, pageSize)
-	if err != nil {
-		return err
-	}
-	items := make([]redeemCodeView, 0, len(codes.Items))
-	for _, code := range codes.Items {
-		items = append(items, redeemCodeView{ID: code.ID, Code: maskRedeemCode(code.Code), Type: code.Type, Status: code.Status, Value: code.Value, UsedBy: code.UsedBy, ExpiresAt: code.ExpiresAt, CreatedAt: code.CreatedAt})
-	}
-	writeData(w, http.StatusOK, map[string]any{"site_id": site.ID, "site_name": site.Name, "items": items, "total": codes.Total})
-	return nil
-}
-
-// billingAuditHandler is deliberately read-only. It proxies the upstream
-// administrator order listing and keeps the source site visible in the result.
-func (a *App) billingAuditHandler(w http.ResponseWriter, r *http.Request) error {
-	identity := identityFrom(r)
-	siteID := r.URL.Query().Get("site_id")
-	if siteID == "" {
-		return &apiError{Status: http.StatusBadRequest, Code: "SITE_REQUIRED", Message: "请选择一个 Sub2API 站点"}
-	}
-	site, err := a.siteSecret(r.Context(), siteID, identity.ID)
-	if err != nil {
-		return err
-	}
-	client, err := a.sub2Client(site)
-	if err != nil {
-		return err
-	}
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
-	orders, err := client.ListPaymentOrders(r.Context(), page, pageSize)
-	if err != nil {
-		return err
-	}
-	writeData(w, http.StatusOK, billingAuditResponse{billingAuditPage: billingAuditPage{SiteID: site.ID, SiteName: site.Name, Items: orders.Items, Total: orders.Total}, Summary: upstream.SummarizePaymentOrders(orders.Items)})
-	return nil
 }

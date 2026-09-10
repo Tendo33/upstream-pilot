@@ -1,7 +1,6 @@
 package upstream
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -55,21 +54,6 @@ func TestSub2ClientNormalizesAdminEndpointAndHeaders(t *testing.T) {
 	}
 }
 
-func TestNormalizePaymentStatus(t *testing.T) {
-	for input, want := range map[string]string{"PENDING": "pending", "PAID": "paid", "RECHARGING": "recharging", "COMPLETED": "completed", "EXPIRED": "expired", "FAILED": "failed", "cancelled": "cancelled", "other": "unknown"} {
-		if got := NormalizePaymentStatus(input); got != want {
-			t.Errorf("%q -> %q, want %q", input, got, want)
-		}
-	}
-}
-
-func TestSummarizePaymentOrders(t *testing.T) {
-	s := SummarizePaymentOrders([]PaymentOrder{{Status: "PAID", Amount: 10}, {Status: "COMPLETED", Amount: 20}, {Status: "FAILED", Amount: 3}})
-	if s.CountByStatus["paid"] != 1 || s.AmountByStatus["completed"] != 20 || s.CountByStatus["failed"] != 1 {
-		t.Fatalf("unexpected summary: %+v", s)
-	}
-}
-
 func TestSub2ClientListAccountsFollowsReportedTotal(t *testing.T) {
 	var mu sync.Mutex
 	pages := make([]int, 0, 2)
@@ -103,147 +87,6 @@ func TestSub2ClientListAccountsFollowsReportedTotal(t *testing.T) {
 	defer mu.Unlock()
 	if fmt.Sprint(pages) != "[1 2]" {
 		t.Fatalf("pages = %v", pages)
-	}
-}
-
-func TestSub2ClientObservesCredentialBaseURLsAndUsesExportFallback(t *testing.T) {
-	const secret = "exported-api-key-must-not-escape"
-	exportRequests := 0
-	client, server := newSub2TestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/admin/accounts":
-			writeSub2Envelope(t, w, map[string]any{"items": []map[string]any{
-				{"id": 1, "name": "omitted"},
-				{"id": 2, "name": "explicit-null", "credentials": nil},
-				{"id": 3, "name": "inline", "credentials": map[string]any{"baseUrl": "https://inline.example/v1/?token=drop#fragment", "api_key": secret}},
-				{"id": 4, "name": "invalid", "credentials": map[string]any{"base_url": "ftp://invalid.example", "api_key": secret}},
-			}, "total": 4})
-		case "/api/v1/admin/accounts/data":
-			exportRequests++
-			if r.URL.Query().Get("ids") != "1" || r.URL.Query().Get("include_proxies") != "false" {
-				t.Errorf("export query = %q", r.URL.RawQuery)
-			}
-			writeSub2Envelope(t, w, map[string]any{"data": map[string]any{"accounts": []map[string]any{
-				{"account_id": "1", "credentials": map[string]any{"base_url": " https://fallback.example/v1/?api_key=drop#fragment ", "api_key": secret}},
-			}}})
-		default:
-			t.Errorf("unexpected request %s", r.URL.String())
-			http.NotFound(w, r)
-		}
-	}, "")
-	defer server.Close()
-
-	accounts, err := client.ListAccounts(context.Background())
-	if err != nil {
-		t.Fatalf("ListAccounts: %v", err)
-	}
-	if exportRequests != 1 {
-		t.Fatalf("export requests = %d", exportRequests)
-	}
-	if len(accounts) != 4 {
-		t.Fatalf("accounts = %#v", accounts)
-	}
-	if !accounts[0].ObservedSourceBaseURLKnown || accounts[0].ObservedSourceBaseURL == nil || *accounts[0].ObservedSourceBaseURL != "https://fallback.example/v1" {
-		t.Fatalf("fallback observation = %#v", accounts[0])
-	}
-	if !accounts[1].SourceCredentialsPresent || !accounts[1].ObservedSourceBaseURLKnown || accounts[1].ObservedSourceBaseURL != nil {
-		t.Fatalf("explicit null observation = %#v", accounts[1])
-	}
-	if !accounts[1].ObservedSourceCredentialFingerprintKnown || accounts[1].ObservedSourceCredentialFingerprint != "" {
-		t.Fatalf("explicit null credential must clear the fingerprint: %#v", accounts[1])
-	}
-	if !accounts[2].ObservedSourceBaseURLKnown || accounts[2].ObservedSourceBaseURL == nil || *accounts[2].ObservedSourceBaseURL != "https://inline.example/v1" {
-		t.Fatalf("inline observation = %#v", accounts[2])
-	}
-	if !accounts[3].SourceCredentialsPresent || accounts[3].ObservedSourceBaseURLKnown {
-		t.Fatalf("invalid observation must remain unknown: %#v", accounts[3])
-	}
-	encoded, err := json.Marshal(accounts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(encoded, []byte(secret)) || bytes.Contains(encoded, []byte("api_key")) || bytes.Contains(encoded, []byte("credentials")) {
-		t.Fatalf("serialized accounts leaked credentials: %s", encoded)
-	}
-	if !accounts[2].ObservedSourceCredentialFingerprintKnown || accounts[2].ObservedSourceCredentialFingerprint == "" || accounts[2].ObservedSourceCredentialFingerprint == secret {
-		t.Fatalf("credential fingerprint was not captured safely: %#v", accounts[2])
-	}
-}
-
-func TestSub2ClientMissingExportEndpointKeepsObservationUnknown(t *testing.T) {
-	const secret = "error-body-api-key-must-not-escape"
-	exportRequests := 0
-	client, server := newSub2TestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/admin/accounts":
-			items := make([]map[string]any, 201)
-			for index := range items {
-				items[index] = map[string]any{"id": index + 1, "name": "omitted"}
-			}
-			writeSub2Envelope(t, w, map[string]any{"items": items, "total": len(items)})
-		case "/api/v1/admin/accounts/data":
-			exportRequests++
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = fmt.Fprintf(w, `{"api_key":%q}`, secret)
-		default:
-			http.NotFound(w, r)
-		}
-	}, "")
-	defer server.Close()
-
-	accounts, err := client.ListAccounts(context.Background())
-	if err != nil {
-		t.Fatalf("optional export failure blocked inventory: %v", err)
-	}
-	if len(accounts) != 201 || accounts[0].ObservedSourceBaseURLKnown || accounts[0].ObservedSourceBaseURL != nil {
-		t.Fatalf("observation should remain unknown: %#v", accounts)
-	}
-	if exportRequests != 1 {
-		t.Fatalf("missing optional export endpoint was retried %d times", exportRequests)
-	}
-	encoded, _ := json.Marshal(accounts)
-	if bytes.Contains(encoded, []byte(secret)) {
-		t.Fatalf("serialized accounts leaked export error body: %s", encoded)
-	}
-}
-
-func TestSub2ClientExportFallbackContinuesAfterTransientBatchFailure(t *testing.T) {
-	client, server := newSub2TestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/admin/accounts":
-			items := make([]map[string]any, 250)
-			for index := range items {
-				items[index] = map[string]any{"id": index + 1, "name": fmt.Sprintf("account-%d", index+1)}
-			}
-			writeSub2Envelope(t, w, map[string]any{"items": items, "total": len(items)})
-		case "/api/v1/admin/accounts/data":
-			ids := strings.Split(r.URL.Query().Get("ids"), ",")
-			if len(ids) > 0 && ids[0] == "1" {
-				http.Error(w, "temporary failure", http.StatusBadGateway)
-				return
-			}
-			exported := make([]map[string]any, 0, len(ids))
-			for _, id := range ids {
-				exported = append(exported, map[string]any{"account_id": id, "credentials": map[string]any{"base_url": "https://source.example/" + id}})
-			}
-			writeSub2Envelope(t, w, map[string]any{"accounts": exported})
-		default:
-			http.NotFound(w, r)
-		}
-	}, "")
-	defer server.Close()
-
-	accounts, err := client.ListAccounts(context.Background())
-	if err != nil {
-		t.Fatalf("ListAccounts: %v", err)
-	}
-	if accounts[0].ObservedSourceBaseURLKnown {
-		t.Fatalf("failed first batch unexpectedly produced an observation: %#v", accounts[0])
-	}
-	for _, index := range []int{100, 200, 249} {
-		if !accounts[index].ObservedSourceBaseURLKnown || accounts[index].ObservedSourceBaseURL == nil {
-			t.Fatalf("later account %d was starved: %#v", index+1, accounts[index])
-		}
 	}
 }
 
