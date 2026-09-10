@@ -106,6 +106,7 @@ func (a *App) Router() http.Handler {
 			protected.Post("/service-profiles/{profileID}/probe", a.wrap(a.runServiceCanaryHandler))
 			protected.Get("/service-profiles/{profileID}/runs", a.wrap(a.serviceCanaryHistoryHandler))
 			protected.Get("/sites", a.wrap(a.listSites))
+			protected.Get("/sites/database-hint", a.wrap(a.siteDatabaseHint))
 			protected.Post("/sites", a.wrap(a.createSite))
 			protected.Route("/sites/{siteID}", func(site chi.Router) {
 				site.Get("/capabilities", a.wrap(a.siteCapabilitiesHandler))

@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/Tendo33/upstream-pilot/internal/database"
 	"github.com/Tendo33/upstream-pilot/internal/upstream"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type sourceAccountRow struct {
@@ -30,15 +33,15 @@ type sourceAccountRow struct {
 	ParentAccountID        *int64
 }
 
-func (a *App) loadSourceInventory(ctx context.Context) ([]upstream.Sub2Group, []upstream.Sub2Account, error) {
-	if a.sourceDB == nil {
-		return nil, nil, &apiError{Status: 503, Code: "SOURCE_DATABASE_REQUIRED", Message: "请配置 PILOT_SUB2API_DATABASE_URL，连接 Sub2API 只读数据库"}
+func (a *App) loadSourceInventory(ctx context.Context, pool *pgxpool.Pool) ([]upstream.Sub2Group, []upstream.Sub2Account, error) {
+	if pool == nil {
+		return nil, nil, &apiError{Status: 503, Code: "SOURCE_DATABASE_REQUIRED", Message: "请填写 Sub2API 数据库地址"}
 	}
-	groups, groupByID, err := a.loadSourceGroups(ctx)
+	groups, groupByID, err := a.loadSourceGroups(ctx, pool)
 	if err != nil {
 		return nil, nil, sourceCapabilityError(err, "Sub2API 数据库缺少 groups 表，无法同步库存")
 	}
-	rows, err := a.sourceDB.Query(ctx, `
+	rows, err := pool.Query(ctx, `
 		SELECT id,name,platform,type,status,schedulable,priority,concurrency,load_factor,rate_multiplier,updated_at,
 		 COALESCE(extra,'{}'::jsonb),rate_limit_reset_at,overload_until,temp_unschedulable_until,expires_at,auto_pause_on_expired,parent_account_id
 		 FROM accounts WHERE deleted_at IS NULL ORDER BY id`)
@@ -59,7 +62,7 @@ func (a *App) loadSourceInventory(ctx context.Context) ([]upstream.Sub2Group, []
 	if err := rows.Err(); err != nil {
 		return nil, nil, err
 	}
-	memberships, err := a.loadSourceMemberships(ctx, ids)
+	memberships, err := a.loadSourceMemberships(ctx, pool, ids)
 	if err != nil {
 		return nil, nil, sourceCapabilityError(err, "Sub2API 数据库缺少 account_groups 表，无法同步库存")
 	}
@@ -74,8 +77,8 @@ func (a *App) loadSourceInventory(ctx context.Context) ([]upstream.Sub2Group, []
 	return groups, accounts, nil
 }
 
-func (a *App) loadSourceGroups(ctx context.Context) ([]upstream.Sub2Group, map[int64]upstream.Sub2Group, error) {
-	rows, err := a.sourceDB.Query(ctx, `SELECT id,name,COALESCE(platform,''),status,rate_multiplier FROM groups WHERE deleted_at IS NULL ORDER BY id`)
+func (a *App) loadSourceGroups(ctx context.Context, pool *pgxpool.Pool) ([]upstream.Sub2Group, map[int64]upstream.Sub2Group, error) {
+	rows, err := pool.Query(ctx, `SELECT id,name,COALESCE(platform,''),status,rate_multiplier FROM groups WHERE deleted_at IS NULL ORDER BY id`)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -97,12 +100,12 @@ func (a *App) loadSourceGroups(ctx context.Context) ([]upstream.Sub2Group, map[i
 	return groups, byID, rows.Err()
 }
 
-func (a *App) loadSourceMemberships(ctx context.Context, accountIDs []int64) (map[int64][]upstream.Sub2AccountGroup, error) {
+func (a *App) loadSourceMemberships(ctx context.Context, pool *pgxpool.Pool, accountIDs []int64) (map[int64][]upstream.Sub2AccountGroup, error) {
 	result := make(map[int64][]upstream.Sub2AccountGroup, len(accountIDs))
 	if len(accountIDs) == 0 {
 		return result, nil
 	}
-	rows, err := a.sourceDB.Query(ctx, `SELECT account_id,group_id,priority FROM account_groups WHERE account_id=ANY($1) ORDER BY account_id,priority,group_id`, accountIDs)
+	rows, err := pool.Query(ctx, `SELECT account_id,group_id,priority FROM account_groups WHERE account_id=ANY($1) ORDER BY account_id,priority,group_id`, accountIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -166,4 +169,32 @@ func accountFromSourceRow(row sourceAccountRow, memberships []upstream.Sub2Accou
 		return upstream.Sub2Account{}, fmt.Errorf("decode source account %d: %w", row.ID, err)
 	}
 	return account, nil
+}
+
+func (a *App) sourcePoolForSite(ctx context.Context, site SiteSecret) (*pgxpool.Pool, func(), error) {
+	dsn := ""
+	if strings.TrimSpace(site.DatabaseURLCiphertext) != "" {
+		plain, err := a.cipher.Decrypt(site.DatabaseURLCiphertext, "site-db:"+site.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		dsn = strings.TrimSpace(plain)
+	}
+	if dsn == "" {
+		dsn = strings.TrimSpace(a.config.Sub2DatabaseURL)
+	}
+	if dsn == "" && a.sourceDB != nil {
+		return a.sourceDB, func() {}, nil
+	}
+	if dsn == "" {
+		return nil, nil, &apiError{Status: 503, Code: "SOURCE_DATABASE_REQUIRED", Message: "请填写 Sub2API 数据库地址"}
+	}
+	if a.sourceDB != nil && dsn == strings.TrimSpace(a.config.Sub2DatabaseURL) {
+		return a.sourceDB, func() {}, nil
+	}
+	pool, err := database.OpenSource(ctx, dsn)
+	if err != nil {
+		return nil, nil, err
+	}
+	return pool, pool.Close, nil
 }

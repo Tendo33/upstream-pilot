@@ -19,7 +19,7 @@ import (
 )
 
 func TestLoadSourceInventoryRequiresDatabase(t *testing.T) {
-	_, _, err := (&App{}).loadSourceInventory(context.Background())
+	_, _, err := (&App{}).loadSourceInventory(context.Background(), nil)
 	apiErr, ok := err.(*apiError)
 	if !ok || apiErr.Code != "SOURCE_DATABASE_REQUIRED" {
 		t.Fatalf("err = %#v, want SOURCE_DATABASE_REQUIRED", err)

@@ -45,16 +45,15 @@ cp .env.example .env
 openssl rand -base64 32
 ```
 
-编辑 `.env`，填入独立数据库的 `PILOT_DATABASE_URL`，将生成的密钥填入 `PILOT_MASTER_KEY`，然后：
-
-服务用户、用量排行、IP 风控、充值审计、兑换码和库存同步使用数据库作为数据源。启用这些能力时，在 `PILOT_SUB2API_DATABASE_URL` 填写 Sub2API PostgreSQL 的只读连接。Pilot 只设置只读会话、不会执行 Sub2API 迁移；探测、写回和业务控制仍通过 Sub2API 管理接口完成。库存同步读取 `accounts`、`groups`、`account_groups`，不读取凭据密文。流量和成本采集尚未迁移，当前仍依赖管理 API。
+编辑 `.env`，填入独立数据库的 `PILOT_DATABASE_URL`，将生成的密钥填入 `PILOT_MASTER_KEY`。同一台机器上已有 Sub2API 容器时，不必手填只读库地址：
 
 ```bash
+./scripts/detect-sub2api.sh --for host
 make build
 ./scripts/run-local.sh .env
 ```
 
-默认仅监听 `127.0.0.1:33777`。打开浏览器创建管理员，再添加 Sub2API 站点。主密钥用于解密保存的管理凭据，需要与数据库一起备份。
+默认仅监听 `127.0.0.1:33777`。打开浏览器创建管理员，再添加站点：管理地址、API Key 和 Sub2API 只读数据库。同一 Docker 主机探测到的库地址会预填。探测和写回走管理接口；库存和运营页走该站点的只读库。主密钥用于解密保存的管理凭据和数据库地址，需要与数据库一起备份。
 
 ### Docker 快速开始
 
@@ -62,6 +61,8 @@ make build
 curl -fsSL https://raw.githubusercontent.com/Tendo33/upstream-pilot/main/install.sh -o install.sh
 bash install.sh
 ```
+
+安装脚本会生成 Pilot 自己的数据库密码和主密钥。若本机已有正在运行的 Sub2API 容器，还会自动写入只读库地址并加入对方 Docker 网络。之后只需在控制台添加管理地址和 API Key。
 
 安装脚本只负责首次安装和保留已有数据。升级使用指定版本，失败时可回滚：
 

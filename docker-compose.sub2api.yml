@@ -1,0 +1,12 @@
+# Attached by scripts/detect-sub2api.sh when a Sub2API Compose network is found.
+services:
+  pilot:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - sub2api
+
+networks:
+  sub2api:
+    external: true
+    name: ${PILOT_SUB2API_NETWORK:?run scripts/detect-sub2api.sh first}

@@ -56,7 +56,9 @@ func main() {
 		logger.Info("database and audit log migrations applied")
 		return
 	}
-	if cfg.Sub2DatabaseURL != "" {
+	if cfg.Sub2DatabaseURL == "" {
+		logger.Info("Sub2API 只读库未配置；同一 Docker 主机可运行 ./scripts/detect-sub2api.sh")
+	} else {
 		sourcePool, err := database.OpenSource(ctx, cfg.Sub2DatabaseURL)
 		if err != nil {
 			logger.Error("Sub2API database reader failed", slog.Any("error", err))

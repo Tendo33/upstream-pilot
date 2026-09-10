@@ -2,6 +2,7 @@ import {
   ArrowDownUp,
   CircleAlert,
   CloudCog,
+  Database,
   KeyRound,
   Pencil,
   Percent,
@@ -37,6 +38,7 @@ const newSite: SiteInput = {
   name: "",
   base_url: "",
   api_key: "",
+  database_url: "",
   enabled: true,
   inventory_interval_seconds: 300,
   priority_start: 1,
@@ -53,6 +55,7 @@ function fromSite(site: Site): SiteInput {
     name: site.name,
     base_url: site.base_url,
     api_key: "",
+    database_url: "",
     enabled: site.enabled,
     inventory_interval_seconds: site.inventory_interval_seconds,
     priority_start: site.priority_start,
@@ -87,12 +90,27 @@ export function SitesPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  async function startCreate() {
+    let databaseURL = "";
+    try {
+      const hint = await api<{ database_url: string }>("/sites/database-hint");
+      databaseURL = hint.database_url || "";
+    } catch {
+      databaseURL = "";
+    }
+    setEditor({ site: null, values: { ...newSite, database_url: databaseURL } });
+  }
+
   async function saveSite(event: FormEvent) {
     event.preventDefault();
     if (!editor) return;
     const values = editor.values;
     if (!values.name.trim() || !values.base_url.trim() || (!editor.site && !values.api_key.trim())) {
-      toast("请填写名称、地址和管理 API Key", "error");
+      toast("请填写名称、管理地址和 API Key", "error");
+      return;
+    }
+    if (!editor.site && !values.database_url.trim()) {
+      toast("请填写 Sub2API 数据库地址", "error");
       return;
     }
     setSaving(true);
@@ -182,7 +200,7 @@ export function SitesPage() {
       <PageHeader
         title="站点"
         description="管理当前用户拥有的 Sub2API 实例与库存同步策略"
-        actions={<Button variant="primary" onClick={() => setEditor({ site: null, values: { ...newSite } })}><Plus size={16} />添加站点</Button>}
+        actions={<Button variant="primary" onClick={() => void startCreate()}><Plus size={16} />添加站点</Button>}
       />
 
       {capabilitySite && <SiteCapabilities key={capabilitySite.id} id={capabilitySite.id} name={capabilitySite.name} close={() => {setCapabilitySite(null); requestAnimationFrame(() => capabilityReturn.current?.focus());}}/>}
@@ -192,8 +210,8 @@ export function SitesPage() {
         <section className="panel">
           <EmptyState
             title="还没有站点"
-            description="添加 Sub2API 管理地址后即可同步账号与分组。"
-            action={<Button variant="primary" onClick={() => setEditor({ site: null, values: { ...newSite } })}><Plus size={16} />添加站点</Button>}
+            description="添加管理地址、API Key 和只读数据库地址后即可同步账号与分组。"
+            action={<Button variant="primary" onClick={() => void startCreate()}><Plus size={16} />添加站点</Button>}
             icon={<Server size={21} />}
           />
         </section>
@@ -206,7 +224,7 @@ export function SitesPage() {
                 <div className="site-main">
                   <div className="site-icon"><Server size={19} /></div>
                   <div className="site-title">
-                    <div><h2>{site.name}</h2><Badge tone={state.tone}>{state.label}</Badge>{!site.enabled ? <Badge>已停用</Badge> : null}</div>
+                    <div><h2>{site.name}</h2><Badge tone={state.tone}>{state.label}</Badge>{site.database_configured ? <Badge tone="success">只读库已配置</Badge> : <Badge tone="warning">未配置只读库</Badge>}{!site.enabled ? <Badge>已停用</Badge> : null}</div>
                     <span title={site.base_url}>{site.base_url}</span>
                   </div>
                 </div>
@@ -250,7 +268,7 @@ export function SitesPage() {
       <Modal
         open={Boolean(editor)}
         title={editor?.site ? "编辑站点" : "添加站点"}
-        description={editor?.site ? "留空 API Key 可保留原密钥" : "连接一个 Sub2API 管理端"}
+        description={editor?.site ? "管理地址、API Key 和数据库地址留空则保持不变" : "同时填写管理接口和只读数据库。同一 Docker 主机探测到的库地址会预填。"}
         onClose={() => !saving && setEditor(null)}
         footer={
           <>
@@ -274,6 +292,9 @@ export function SitesPage() {
             </Field>
             <Field label="管理 API Key" hint={editor.site ? "仅在需要轮换密钥时填写" : "密钥将使用主密钥加密后存储"} required={!editor.site}>
               <div className="input-prefix"><KeyRound size={15} /><Input type="password" value={editor.values.api_key} onChange={(event) => setEditor({ ...editor, values: { ...editor.values, api_key: event.target.value } })} placeholder={editor.site ? "保持不变" : "sk-..."} autoComplete="new-password" /></div>
+            </Field>
+            <Field label="Sub2API 数据库" hint={editor.site ? "仅在需要更换只读库时填写" : "postgres://user:password@host:5432/dbname，将加密存储，不写回 Sub2API"} required={!editor.site}>
+              <div className="input-prefix"><Database size={15} /><Input type="password" value={editor.values.database_url} onChange={(event) => setEditor({ ...editor, values: { ...editor.values, database_url: event.target.value } })} placeholder={editor.site ? "保持不变" : "postgres://user:password@host:5432/sub2api?sslmode=disable"} autoComplete="new-password" /></div>
             </Field>
             <div className="form-divider"><CloudCog size={15} /><span>调度参数</span></div>
             <div className="form-grid two">

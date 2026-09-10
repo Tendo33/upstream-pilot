@@ -56,6 +56,7 @@ export interface Site {
   last_cache_sample_at?: string;
   account_count: number;
   enabled_automation_count: number;
+  database_configured?: boolean;
   created_at: string;
 }
 
@@ -63,6 +64,7 @@ export interface SiteInput {
   name: string;
   base_url: string;
   api_key: string;
+  database_url: string;
   enabled: boolean;
   inventory_interval_seconds: number;
   priority_start: number;

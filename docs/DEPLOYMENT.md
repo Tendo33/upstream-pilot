@@ -10,7 +10,9 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/Tendo33/upstream-pilot/main/install.sh)
 ```
 
-脚本会克隆或更新项目、生成 PostgreSQL 密码和 Pilot 主密钥、创建 `.env` 并启动 Compose；不会删除已有数据卷。
+脚本会克隆或更新项目、生成 PostgreSQL 密码和 Pilot 主密钥、创建 `.env` 并启动 Compose；不会删除已有数据卷。同一台机器上已有 Sub2API 容器时，会自动写入只读库地址并加入对方 Docker 网络，不必再填 `PILOT_SUB2API_DATABASE_URL`。多个容器时设置 `SUB2API_CONTAINER`。
+
+浏览器打开后创建管理员，再添加站点：管理地址、API Key 和 Sub2API 只读数据库。探测脚本若已写入 `.env`，添加站点时会预填数据库地址。探测和写回走管理接口；库存和运营页走该站点的只读库。
 
 正式版本发布后，可以在 `.env` 设置 `PILOT_IMAGE=docker.io/simonsun3/upstream-pilot:latest`，使用已发布镜像；
 默认配置仍会本地构建，便于开发和内网环境使用。GitHub Actions 仅在 `v*.*.*` tag 发布多架构镜像，

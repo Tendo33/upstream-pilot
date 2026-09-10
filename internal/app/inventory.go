@@ -30,7 +30,14 @@ func (a *App) syncSiteLocked(ctx context.Context, siteID, ownerFilter, actorID, 
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	groups, accounts, err := a.loadSourceInventory(requestCtx)
+	pool, closePool, err := a.sourcePoolForSite(requestCtx, site)
+	if err != nil {
+		a.recordSiteFailure(ctx, siteID, err)
+		_ = a.audit(ctx, site.OwnerID, actorID, siteID, "", "inventory.sync", "failed", map[string]any{"error": err.Error(), "mode": mode})
+		return fmt.Errorf("库存同步失败：%w", err)
+	}
+	defer closePool()
+	groups, accounts, err := a.loadSourceInventory(requestCtx, pool)
 	if err != nil {
 		a.recordSiteFailure(ctx, siteID, err)
 		_ = a.audit(ctx, site.OwnerID, actorID, siteID, "", "inventory.sync", "failed", map[string]any{"error": err.Error(), "mode": mode})

@@ -30,6 +30,13 @@ if grep -q '^PILOT_MASTER_KEY=replace-with-' .env; then
   echo "已生成 Pilot 主密钥并写入 .env，请备份该文件"
 fi
 
+if ./scripts/detect-sub2api.sh --for docker; then
+  :
+else
+  echo "未自动连上 Sub2API 数据库。本机有正在运行的 Sub2API 容器时可再执行 ./scripts/detect-sub2api.sh"
+fi
+
 docker compose up -d --build
 echo "Upstream Pilot 已启动：${PILOT_PUBLIC_URL:-http://localhost:33777}"
+echo "打开控制台创建管理员，然后添加站点：管理地址、API Key 和 Sub2API 数据库。"
 echo "查看状态：cd '$PROJECT_DIR' && docker compose ps"

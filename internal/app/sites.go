@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ type siteInput struct {
 	Name                     string  `json:"name"`
 	BaseURL                  string  `json:"base_url"`
 	APIKey                   string  `json:"api_key"`
+	DatabaseURL              string  `json:"database_url"`
 	Enabled                  *bool   `json:"enabled"`
 	InventoryIntervalSeconds int     `json:"inventory_interval_seconds"`
 	PriorityStart            int     `json:"priority_start"`
@@ -42,6 +44,12 @@ func normalizeSiteInput(input *siteInput, creating bool) error {
 	input.APIKey = strings.TrimSpace(input.APIKey)
 	if creating && input.APIKey == "" {
 		return &apiError{Status: http.StatusBadRequest, Code: "API_KEY_REQUIRED", Message: "请填写 Sub2API 管理 API Key"}
+	}
+	input.DatabaseURL = strings.TrimSpace(input.DatabaseURL)
+	if input.DatabaseURL != "" {
+		if err := validatePostgresURL(input.DatabaseURL); err != nil {
+			return err
+		}
 	}
 	if input.InventoryIntervalSeconds == 0 {
 		input.InventoryIntervalSeconds = 300
@@ -87,6 +95,7 @@ const siteSelect = `
 	       s.last_inventory_at,s.last_reconcile_at,s.last_cache_sample_at,
 	       count(a.id) FILTER (WHERE a.deleted_at IS NULL),
 	       count(a.id) FILTER (WHERE a.deleted_at IS NULL AND (a.health_enabled OR a.rate_sync_enabled OR a.priority_enabled OR a.guard_enabled)),
+	       s.database_url_ciphertext <> '',
 	       s.created_at
 	FROM sites s LEFT JOIN upstream_accounts a ON a.site_id=s.id`
 
@@ -95,8 +104,16 @@ func scanSite(row pgx.Row) (Site, error) {
 	err := row.Scan(&site.ID, &site.OwnerID, &site.Name, &site.BaseURL, &site.Enabled, &site.ConnectionState, &site.LastError, &site.VersionHint,
 		&site.InventoryIntervalSeconds, &site.PriorityStart, &site.PriorityStep, &site.ReconcileIntervalSeconds,
 		&site.CacheRatePriorityEnabled, &site.CacheRateWindowSeconds, &site.RatePriorityWeight, &site.CacheRatePriorityWeight,
-		&site.LastInventoryAt, &site.LastReconcileAt, &site.LastCacheSampleAt, &site.AccountCount, &site.EnabledAutomationCount, &site.CreatedAt)
+		&site.LastInventoryAt, &site.LastReconcileAt, &site.LastCacheSampleAt, &site.AccountCount, &site.EnabledAutomationCount, &site.DatabaseConfigured, &site.CreatedAt)
 	return site, err
+}
+
+func validatePostgresURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Host == "" {
+		return &apiError{Status: http.StatusBadRequest, Code: "INVALID_DATABASE_URL", Message: "数据库地址必须是 postgres://user:password@host:5432/dbname"}
+	}
+	return nil
 }
 
 func (a *App) listSites(w http.ResponseWriter, r *http.Request) error {
@@ -132,13 +149,27 @@ func (a *App) createSite(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	databaseURL := input.DatabaseURL
+	if databaseURL == "" {
+		databaseURL = strings.TrimSpace(a.config.Sub2DatabaseURL)
+	}
+	if databaseURL == "" {
+		return &apiError{Status: http.StatusBadRequest, Code: "DATABASE_URL_REQUIRED", Message: "请填写 Sub2API 数据库地址"}
+	}
+	if err := validatePostgresURL(databaseURL); err != nil {
+		return err
+	}
+	sealedDB, err := a.cipher.Encrypt(databaseURL, "site-db:"+siteID)
+	if err != nil {
+		return err
+	}
 	enabled := true
 	if input.Enabled != nil {
 		enabled = *input.Enabled
 	}
 	_, err = a.db.Exec(r.Context(), `
-		INSERT INTO sites(id,owner_id,name,base_url,api_key_ciphertext,enabled,inventory_interval_seconds,priority_start,priority_step,reconcile_interval_seconds,cache_rate_priority_enabled,cache_rate_window_seconds,rate_priority_weight,cache_rate_priority_weight,next_cache_sample_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now())`, siteID, identity.ID, input.Name, input.BaseURL, sealed, enabled, input.InventoryIntervalSeconds, input.PriorityStart, input.PriorityStep, input.ReconcileIntervalSeconds, input.CacheRatePriorityEnabled, input.CacheRateWindowSeconds, input.RatePriorityWeight, input.CacheRatePriorityWeight)
+		INSERT INTO sites(id,owner_id,name,base_url,api_key_ciphertext,database_url_ciphertext,enabled,inventory_interval_seconds,priority_start,priority_step,reconcile_interval_seconds,cache_rate_priority_enabled,cache_rate_window_seconds,rate_priority_weight,cache_rate_priority_weight,next_cache_sample_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())`, siteID, identity.ID, input.Name, input.BaseURL, sealed, sealedDB, enabled, input.InventoryIntervalSeconds, input.PriorityStart, input.PriorityStep, input.ReconcileIntervalSeconds, input.CacheRatePriorityEnabled, input.CacheRateWindowSeconds, input.RatePriorityWeight, input.CacheRatePriorityWeight)
 	if err != nil {
 		if strings.Contains(err.Error(), "sites_owner_id_base_url_key") {
 			return &apiError{Status: http.StatusConflict, Code: "SITE_EXISTS", Message: "该站点地址已经存在"}
@@ -180,6 +211,13 @@ func (a *App) updateSite(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 	}
+	sealedDB := ""
+	if input.DatabaseURL != "" {
+		sealedDB, err = a.cipher.Encrypt(input.DatabaseURL, "site-db:"+siteID)
+		if err != nil {
+			return err
+		}
+	}
 	if input.APIKey != "" {
 		current, e := a.siteSecret(r.Context(), siteID, identity.ID)
 		if e != nil {
@@ -192,12 +230,13 @@ func (a *App) updateSite(w http.ResponseWriter, r *http.Request) error {
 	command, err := a.db.Exec(r.Context(), `
 		UPDATE sites SET name=$3,base_url=$4,
 		 api_key_ciphertext=CASE WHEN $5<>'' THEN $5 ELSE api_key_ciphertext END,
+		 database_url_ciphertext=CASE WHEN $16<>'' THEN $16 ELSE database_url_ciphertext END,
 		 enabled=CASE WHEN $6::boolean THEN $7 ELSE enabled END,
 		 inventory_interval_seconds=$8,priority_start=$9,priority_step=$10,reconcile_interval_seconds=$11,
 		 cache_rate_priority_enabled=$12,cache_rate_window_seconds=$13,rate_priority_weight=$14,cache_rate_priority_weight=$15,
 		 next_inventory_at=LEAST(next_inventory_at,now()),next_reconcile_at=LEAST(next_reconcile_at,now()),
 		 next_cache_sample_at=CASE WHEN $12 THEN LEAST(next_cache_sample_at,now()) ELSE next_cache_sample_at END,updated_at=now()
-		WHERE id=$1 AND owner_id=$2`, siteID, identity.ID, input.Name, input.BaseURL, sealed, input.Enabled != nil, boolValue(input.Enabled), input.InventoryIntervalSeconds, input.PriorityStart, input.PriorityStep, input.ReconcileIntervalSeconds, input.CacheRatePriorityEnabled, input.CacheRateWindowSeconds, input.RatePriorityWeight, input.CacheRatePriorityWeight)
+		WHERE id=$1 AND owner_id=$2`, siteID, identity.ID, input.Name, input.BaseURL, sealed, input.Enabled != nil, boolValue(input.Enabled), input.InventoryIntervalSeconds, input.PriorityStart, input.PriorityStep, input.ReconcileIntervalSeconds, input.CacheRatePriorityEnabled, input.CacheRateWindowSeconds, input.RatePriorityWeight, input.CacheRatePriorityWeight, sealedDB)
 	if err != nil {
 		return err
 	}
@@ -232,8 +271,16 @@ func (a *App) deleteSite(w http.ResponseWriter, r *http.Request) error {
 
 func (a *App) siteSecret(ctx context.Context, siteID, ownerID string) (SiteSecret, error) {
 	var site SiteSecret
-	err := a.db.QueryRow(ctx, `SELECT id,owner_id,name,base_url,api_key_ciphertext,enabled,telemetry_generation FROM sites WHERE id=$1 AND owner_id=COALESCE(NULLIF($2,'')::uuid,owner_id)`, siteID, ownerID).Scan(&site.ID, &site.OwnerID, &site.Name, &site.BaseURL, &site.APIKeyCiphertext, &site.Enabled, &site.TelemetryGeneration)
+	err := a.db.QueryRow(ctx, `SELECT id,owner_id,name,base_url,api_key_ciphertext,database_url_ciphertext,enabled,telemetry_generation FROM sites WHERE id=$1 AND owner_id=COALESCE(NULLIF($2,'')::uuid,owner_id)`, siteID, ownerID).Scan(&site.ID, &site.OwnerID, &site.Name, &site.BaseURL, &site.APIKeyCiphertext, &site.DatabaseURLCiphertext, &site.Enabled, &site.TelemetryGeneration)
 	return site, err
+}
+
+func (a *App) siteDatabaseHint(w http.ResponseWriter, r *http.Request) error {
+	if err := requireAdmin(identityFrom(r)); err != nil {
+		return err
+	}
+	writeData(w, http.StatusOK, map[string]any{"database_url": a.config.Sub2DatabaseURL})
+	return nil
 }
 
 func (a *App) sub2Client(site SiteSecret) (*upstream.Sub2Client, error) {

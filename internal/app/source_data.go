@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tendo33/upstream-pilot/internal/database"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,8 +20,37 @@ func (a *App) requireSource(r *http.Request) error {
 		return err
 	}
 	if a.sourceDB == nil {
-		return &apiError{Status: http.StatusServiceUnavailable, Code: "SOURCE_DATABASE_REQUIRED", Message: "请配置 PILOT_SUB2API_DATABASE_URL，连接 Sub2API 只读数据库"}
+		if err := a.attachFirstSiteSource(r.Context()); err != nil {
+			return err
+		}
 	}
+	if a.sourceDB == nil {
+		return &apiError{Status: http.StatusServiceUnavailable, Code: "SOURCE_DATABASE_REQUIRED", Message: "请在站点中填写 Sub2API 数据库地址"}
+	}
+	return nil
+}
+
+func (a *App) attachFirstSiteSource(ctx context.Context) error {
+	if a.db == nil || a.cipher == nil {
+		return nil
+	}
+	var siteID, ciphertext string
+	err := a.db.QueryRow(ctx, `SELECT id::text,database_url_ciphertext FROM sites WHERE database_url_ciphertext<>'' ORDER BY created_at LIMIT 1`).Scan(&siteID, &ciphertext)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	dsn, err := a.cipher.Decrypt(ciphertext, "site-db:"+siteID)
+	if err != nil {
+		return err
+	}
+	pool, err := database.OpenSource(ctx, strings.TrimSpace(dsn))
+	if err != nil {
+		return err
+	}
+	a.SetSourceDatabase(pool)
 	return nil
 }
 

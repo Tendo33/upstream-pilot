@@ -11,6 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+func TestValidatePostgresURL(t *testing.T) {
+	if err := validatePostgresURL("https://sub.example.com"); err == nil {
+		t.Fatal("management URL must not pass as a database URL")
+	}
+	if err := validatePostgresURL("postgres://user:pass@sub2api-postgres:5432/sub2api?sslmode=disable"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNormalizePaymentStatus(t *testing.T) {
 	for input, want := range map[string]string{"PENDING": "pending", "PAID": "paid", "RECHARGING": "recharging", "COMPLETED": "completed", "EXPIRED": "expired", "FAILED": "failed", "cancelled": "cancelled", "other": "unknown"} {
 		if got := NormalizePaymentStatus(input); got != want {

@@ -36,6 +36,7 @@ type Site struct {
 	LastCacheSampleAt        *time.Time `json:"last_cache_sample_at,omitempty"`
 	AccountCount             int        `json:"account_count"`
 	EnabledAutomationCount   int        `json:"enabled_automation_count"`
+	DatabaseConfigured       bool       `json:"database_configured"`
 	CreatedAt                time.Time  `json:"created_at"`
 }
 
@@ -116,13 +117,14 @@ type Identity struct {
 }
 
 type SiteSecret struct {
-	TelemetryGeneration int64
-	ID                  string
-	OwnerID             string
-	Name                string
-	BaseURL             string
-	APIKeyCiphertext    string
-	Enabled             bool
+	TelemetryGeneration   int64
+	ID                    string
+	OwnerID               string
+	Name                  string
+	BaseURL               string
+	APIKeyCiphertext      string
+	DatabaseURLCiphertext string
+	Enabled               bool
 }
 
 type AccountWork struct {
